@@ -22,10 +22,15 @@ const getDeliveryState = (
   | 'preparing'
   | 'shipped'
   | 'out_for_delivery'
+  | 'awaiting_confirmation'
   | 'delivered'
   | 'failed'
   | 'cancelled' => {
   if (order.status === 'delivered') {
+    // If delivered but not yet confirmed by buyer, show awaiting confirmation
+    if (order.buyerConfirmedReceived !== true) {
+      return 'awaiting_confirmation';
+    }
     return 'delivered';
   }
 
@@ -61,6 +66,7 @@ const getDeliveryLabel = (
     | 'preparing'
     | 'shipped'
     | 'out_for_delivery'
+    | 'awaiting_confirmation'
     | 'delivered'
     | 'failed'
     | 'cancelled',
@@ -74,6 +80,8 @@ const getDeliveryLabel = (
       return 'On the way';
     case 'out_for_delivery':
       return 'Out for delivery';
+    case 'awaiting_confirmation':
+      return 'Awaiting your confirmation';
     case 'delivered':
       return 'Delivered';
     case 'failed':
