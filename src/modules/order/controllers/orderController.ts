@@ -130,7 +130,7 @@ const DISPUTE_REASONS: OrderDisputeReason[] = [
 ];
 
 const canBuyerSubmitDispute = (order: Order): boolean => {
-  if (order.buyerConfirmedReceived || order.buyerDisputeStatus) {
+  if (order.buyerDisputeStatus) {
     return false;
   }
 

@@ -851,9 +851,11 @@ describe('orderController.submitOrderDispute', () => {
     expect(res.status).toHaveBeenCalledWith(400);
   });
 
-  it('rejects disputes after the buyer has confirmed receipt', async () => {
+  it('lets a buyer dispute a delivered order after confirming receipt', async () => {
     mockGetOrderById.mockResolvedValue({
       ...disputableOrder,
+      status: 'delivered',
+      shipmentStatus: 'delivered',
       buyerConfirmedReceived: true,
     });
     const req: any = {
@@ -866,6 +868,32 @@ describe('orderController.submitOrderDispute', () => {
       body: {
         reason: 'item_arrived_damaged',
       },
+    };
+    const res = createResponse();
+
+    await submitOrderDispute(req, res);
+
+    expect(mockUpdateOrder).toHaveBeenCalledWith(
+      'order-1',
+      expect.objectContaining({
+        buyerDisputeReason: 'item_arrived_damaged',
+        buyerDisputeStatus: 'under_review',
+      }),
+    );
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('rejects a duplicate unresolved dispute', async () => {
+    mockGetOrderById.mockResolvedValue({
+      ...disputableOrder,
+      status: 'delivered',
+      shipmentStatus: 'delivered',
+      buyerDisputeStatus: 'under_review',
+    });
+    const req: any = {
+      user: { uid: 'user-1' },
+      params: { id: 'order-1' },
+      body: { reason: 'wrong_item' },
     };
     const res = createResponse();
 
