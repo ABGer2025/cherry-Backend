@@ -575,8 +575,13 @@ describe('orderController.confirmOrderReceived', () => {
     mockGetShipmentByOrderId.mockResolvedValue(null);
   });
 
-  it('lets the buyer confirm a shipped order as received', async () => {
-    mockGetOrderById.mockResolvedValue(shippedOrder);
+    it('lets the buyer confirm a delivered order as received', async () => {
+      const deliveredOrder = {
+        ...shippedOrder,
+        status: 'delivered',
+        shipmentStatus: 'delivered',
+      };
+      mockGetOrderById.mockResolvedValue(deliveredOrder);
     const req: any = {
       user: {
         uid: 'user-1',
@@ -701,6 +706,23 @@ describe('orderController.confirmOrderReceived', () => {
     expect(mockUpdateOrder).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(409);
   });
+
+  it('rejects orders that are still out for delivery', async () => {
+    mockGetOrderById.mockResolvedValue({
+      ...shippedOrder,
+      shipmentStatus: 'out_for_delivery',
+    });
+    const req: any = {
+      user: { uid: 'user-1' },
+      params: { id: 'order-1' },
+    };
+    const res = createResponse();
+
+    await confirmOrderReceived(req, res);
+
+    expect(mockUpdateOrder).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(409);
+  });
 });
 
 describe('orderController.submitOrderDispute', () => {
@@ -752,8 +774,13 @@ describe('orderController.submitOrderDispute', () => {
     mockGetShipmentByOrderId.mockResolvedValue(null);
   });
 
-  it('lets the buyer submit a dispute for a shipped order', async () => {
-    mockGetOrderById.mockResolvedValue(disputableOrder);
+    it('lets the buyer submit a dispute for a delivered order', async () => {
+      const deliveredOrder = {
+        ...disputableOrder,
+        status: 'delivered',
+        shipmentStatus: 'delivered',
+      };
+      mockGetOrderById.mockResolvedValue(deliveredOrder);
     const req: any = {
       user: {
         uid: 'user-1',
@@ -839,6 +866,21 @@ describe('orderController.submitOrderDispute', () => {
       body: {
         reason: 'item_arrived_damaged',
       },
+    };
+    const res = createResponse();
+
+    await submitOrderDispute(req, res);
+
+    expect(mockUpdateOrder).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(409);
+  });
+
+  it('rejects disputes before the order is delivered', async () => {
+    mockGetOrderById.mockResolvedValue(disputableOrder);
+    const req: any = {
+      user: { uid: 'user-1' },
+      params: { id: 'order-1' },
+      body: { reason: 'wrong_item' },
     };
     const res = createResponse();
 
