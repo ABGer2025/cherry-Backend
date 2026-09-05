@@ -495,8 +495,8 @@ describe('orderController order retrieval', () => {
         data: {
           order: expect.objectContaining({
             id: 'order-1',
-            deliveryState: 'delivered',
-            deliveryLabel: 'Delivered',
+            deliveryState: 'awaiting_confirmation',
+            deliveryLabel: 'Awaiting your confirmation',
             canTrack: true,
           }),
         },
@@ -611,8 +611,8 @@ describe('orderController.confirmOrderReceived', () => {
           order: expect.objectContaining({
             id: 'order-1',
             buyerConfirmedReceived: true,
-            deliveryState: 'delivered',
-            deliveryLabel: 'Delivered',
+            deliveryState: 'confirmed',
+            deliveryLabel: 'Confirmed',
           }),
         },
       }),
@@ -795,6 +795,8 @@ describe('orderController.submitOrderDispute', () => {
             id: 'order-1',
             buyerDisputeReason: 'wrong_item',
             buyerDisputeStatus: 'under_review',
+            deliveryState: 'disputed',
+            deliveryLabel: 'Disputed',
           }),
         },
       }),
