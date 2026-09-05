@@ -119,14 +119,7 @@ const canBuyerConfirmReceived = (order: Order): boolean => {
     return false;
   }
 
-  if (['failed', 'cancelled'].includes(order.status)) {
-    return false;
-  }
-
-  return (
-    ['shipped', 'delivered'].includes(order.status) ||
-    ['en_route', 'out_for_delivery', 'delivered'].includes(order.shipmentStatus)
-  );
+  return order.status === 'delivered' || order.shipmentStatus === 'delivered';
 };
 
 const DISPUTE_REASONS: OrderDisputeReason[] = [
@@ -141,14 +134,7 @@ const canBuyerSubmitDispute = (order: Order): boolean => {
     return false;
   }
 
-  if (['failed', 'cancelled'].includes(order.status)) {
-    return false;
-  }
-
-  return (
-    ['shipped', 'delivered'].includes(order.status) ||
-    ['en_route', 'out_for_delivery', 'delivered'].includes(order.shipmentStatus)
-  );
+  return order.status === 'delivered' || order.shipmentStatus === 'delivered';
 };
 
 const parseDisputeReason = (value: unknown): OrderDisputeReason | null => {
