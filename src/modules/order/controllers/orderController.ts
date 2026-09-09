@@ -22,11 +22,22 @@ const getDeliveryState = (
   | 'preparing'
   | 'shipped'
   | 'out_for_delivery'
+  | 'awaiting_confirmation'
+  | 'confirmed'
+  | 'disputed'
   | 'delivered'
   | 'failed'
   | 'cancelled' => {
+  if (order.buyerDisputeStatus) {
+    return 'disputed';
+  }
+
+  if (order.buyerConfirmedReceived) {
+    return 'confirmed';
+  }
+
   if (order.status === 'delivered') {
-    return 'delivered';
+    return 'awaiting_confirmation';
   }
 
   if (order.status === 'cancelled') {
@@ -61,6 +72,9 @@ const getDeliveryLabel = (
     | 'preparing'
     | 'shipped'
     | 'out_for_delivery'
+    | 'awaiting_confirmation'
+    | 'confirmed'
+    | 'disputed'
     | 'delivered'
     | 'failed'
     | 'cancelled',
@@ -74,6 +88,12 @@ const getDeliveryLabel = (
       return 'On the way';
     case 'out_for_delivery':
       return 'Out for delivery';
+    case 'awaiting_confirmation':
+      return 'Awaiting your confirmation';
+    case 'confirmed':
+      return 'Confirmed';
+    case 'disputed':
+      return 'Disputed';
     case 'delivered':
       return 'Delivered';
     case 'failed':
@@ -99,14 +119,7 @@ const canBuyerConfirmReceived = (order: Order): boolean => {
     return false;
   }
 
-  if (['failed', 'cancelled'].includes(order.status)) {
-    return false;
-  }
-
-  return (
-    ['shipped', 'delivered'].includes(order.status) ||
-    ['en_route', 'out_for_delivery', 'delivered'].includes(order.shipmentStatus)
-  );
+  return order.status === 'delivered' || order.shipmentStatus === 'delivered';
 };
 
 const DISPUTE_REASONS: OrderDisputeReason[] = [
@@ -117,18 +130,11 @@ const DISPUTE_REASONS: OrderDisputeReason[] = [
 ];
 
 const canBuyerSubmitDispute = (order: Order): boolean => {
-  if (order.buyerConfirmedReceived || order.buyerDisputeStatus) {
+  if (order.buyerDisputeStatus) {
     return false;
   }
 
-  if (['failed', 'cancelled'].includes(order.status)) {
-    return false;
-  }
-
-  return (
-    ['shipped', 'delivered'].includes(order.status) ||
-    ['en_route', 'out_for_delivery', 'delivered'].includes(order.shipmentStatus)
-  );
+  return order.status === 'delivered' || order.shipmentStatus === 'delivered';
 };
 
 const parseDisputeReason = (value: unknown): OrderDisputeReason | null => {
