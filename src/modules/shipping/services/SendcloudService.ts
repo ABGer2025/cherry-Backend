@@ -271,11 +271,14 @@ export class SendcloudService {
 
   async downloadLabelPdf(labelUrl: string): Promise<Buffer> {
     try {
-      const response = await this.client.get(labelUrl, {
+      this.assertSendcloudLabelUrl(labelUrl);
+
+      const response = await axios.get<ArrayBuffer>(labelUrl, {
         responseType: 'arraybuffer',
         headers: {
           Accept: 'application/pdf',
         },
+        timeout: 30000,
       });
 
       return Buffer.from(response.data);
@@ -285,6 +288,19 @@ export class SendcloudService {
         error.response?.data?.message ||
         error.message;
       throw new Error(`Sendcloud API Error: ${errorMessage}`);
+    }
+  }
+
+  private assertSendcloudLabelUrl(labelUrl: string): void {
+    const label = new URL(labelUrl);
+    const api = new URL(sendcloudConfig.apiUrl);
+
+    if (
+      label.protocol !== 'https:' ||
+      label.hostname !== api.hostname ||
+      !label.pathname.startsWith(`${api.pathname}/labels/`)
+    ) {
+      throw new Error('Invalid Sendcloud label URL');
     }
   }
 

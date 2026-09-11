@@ -11,6 +11,7 @@ jest.mock('../../../shared/config/sendcloudConfig', () => ({
 
 // Mock axios so we never make real HTTP calls
 jest.mock('axios', () => ({
+  get: jest.fn(),
   create: jest.fn().mockReturnValue({
     get: jest.fn(),
   }),
@@ -117,17 +118,28 @@ describe('SendcloudService.getPickupPoints()', () => {
 
   it('downloads a label PDF from an absolute Sendcloud label URL', async () => {
     const pdf = Buffer.from('%PDF');
-    const labelUrl = 'https://panel.sendcloud.sc/labels/normal_printer/1';
-    mockGet.mockResolvedValue({ data: pdf });
+    const labelUrl =
+      'https://panel.sendcloud.sc/api/v2/labels/normal_printer/1';
+    (axios.get as jest.Mock).mockResolvedValue({ data: pdf });
 
     const result = await service.downloadLabelPdf(labelUrl);
 
     expect(result).toEqual(pdf);
-    expect(mockGet).toHaveBeenCalledWith(labelUrl, {
+    expect(axios.get).toHaveBeenCalledWith(labelUrl, {
       responseType: 'arraybuffer',
       headers: {
         Accept: 'application/pdf',
       },
+      timeout: 30000,
     });
+    expect(mockGet).not.toHaveBeenCalledWith(labelUrl, expect.anything());
+  });
+
+  it('rejects non-Sendcloud label URLs before download', async () => {
+    await expect(
+      service.downloadLabelPdf('https://example.com/api/v2/labels/1'),
+    ).rejects.toThrow('Sendcloud API Error: Invalid Sendcloud label URL');
+
+    expect(axios.get).not.toHaveBeenCalled();
   });
 });

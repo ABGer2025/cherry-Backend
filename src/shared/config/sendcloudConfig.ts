@@ -22,6 +22,10 @@ export const sendcloudConfig = {
   labelMode: parseLabelMode(),
   publicKey: process.env.SENDCLOUD_PUBLIC_KEY || '',
   secretKey: process.env.SENDCLOUD_SECRET_KEY || '',
+  webhookSignatureKey:
+    process.env.SENDCLOUD_WEBHOOK_SIGNATURE_KEY ||
+    process.env.SENDCLOUD_SECRET_KEY ||
+    '',
   apiUrl: process.env.SENDCLOUD_API_URL || 'https://panel.sendcloud.sc/api/v2',
   servicePointsApiUrl:
     process.env.SENDCLOUD_SERVICE_POINTS_API_URL ||

@@ -16,6 +16,7 @@ import {
   pickupPointsQueryValidator,
   saveAddressValidator,
 } from '../validators/shippingValidator';
+import { verifySendcloudWebhookSignature } from '../middleware/sendcloudWebhookAuth';
 
 const router = Router();
 
@@ -470,6 +471,6 @@ router.post(
  *       400:
  *         description: Invalid webhook payload
  */
-router.post('/webhook', handleSendcloudWebhook);
+router.post('/webhook', verifySendcloudWebhookSignature, handleSendcloudWebhook);
 
 export default router;
