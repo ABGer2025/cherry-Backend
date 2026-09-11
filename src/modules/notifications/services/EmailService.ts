@@ -4,6 +4,7 @@ import { emailConfig } from '../../../shared/config/emailConfig';
 interface EmailResult {
   sent: boolean;
   skipped: boolean;
+  emailId?: string;
 }
 
 interface SellerItemSoldEmailInput {
@@ -31,6 +32,10 @@ interface BuyerDeliveredEmailInput {
   buyerName?: string | null;
   productName: string;
   orderId: string;
+}
+
+interface TestEmailInput {
+  to: string;
 }
 
 interface SendEmailInput {
@@ -160,6 +165,21 @@ export class EmailService {
     });
   }
 
+  async sendTestEmail(input: TestEmailInput): Promise<EmailResult> {
+    return this.sendEmail({
+      to: input.to,
+      subject: 'Cherry Resend test email',
+      html: `
+        <p>Resend is configured correctly for Cherry.</p>
+        <p>If you can see this email, the backend can send through Resend.</p>
+      `,
+      text: [
+        'Resend is configured correctly for Cherry.',
+        'If you can see this email, the backend can send through Resend.',
+      ].join('\n'),
+    });
+  }
+
   private async sendEmail(input: SendEmailInput): Promise<EmailResult> {
     if (emailConfig.mode !== 'live') {
       console.log(`Email skipped (${emailConfig.mode}): ${input.subject}`);
@@ -170,7 +190,7 @@ export class EmailService {
       throw new Error('Resend email is not configured');
     }
 
-    await this.resend.emails.send({
+    const response = await this.resend.emails.send({
       from: emailConfig.fromEmail,
       to: input.to,
       subject: input.subject,
@@ -183,7 +203,15 @@ export class EmailService {
       })),
     });
 
-    return { sent: true, skipped: false };
+    if (response.error) {
+      throw new Error(
+        `Resend email failed: ${response.error.name} - ${response.error.message}`,
+      );
+    }
+
+    console.log(`Email sent via Resend: ${response.data.id}`);
+
+    return { sent: true, skipped: false, emailId: response.data.id };
   }
 
   private buildTrackingHtml(

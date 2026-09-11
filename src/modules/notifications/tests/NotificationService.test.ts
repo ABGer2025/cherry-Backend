@@ -92,4 +92,20 @@ describe('NotificationService.sendSellerLabelEmail', () => {
     expect(sendcloudService.downloadLabelPdf).not.toHaveBeenCalled();
     expect(emailService.sendSellerItemSoldEmail).not.toHaveBeenCalled();
   });
+
+  it('falls back to the legacy seller firstname field', async () => {
+    const { service, emailService } = createService();
+
+    await service.sendSellerLabelEmail(order, {
+      ...seller,
+      displayName: undefined as any,
+      firstname: 'Kilo',
+    }, shipment);
+
+    expect(emailService.sendSellerItemSoldEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sellerName: 'Kilo',
+      }),
+    );
+  });
 });

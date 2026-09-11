@@ -359,7 +359,6 @@ router.get(
  *                   - telephone
  *                   - request_label
  *                   - shipment
- *                   - to_service_point
  *                   - weight
  *                   - order_number
  *                 properties:
@@ -389,7 +388,7 @@ router.get(
  *                     example: "+447700900000"
  *                   request_label:
  *                     type: boolean
- *                     example: false
+ *                     example: true
  *                   shipment:
  *                     type: object
  *                     properties:

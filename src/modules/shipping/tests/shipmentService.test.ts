@@ -94,7 +94,7 @@ describe('ShipmentService.createShipmentForPaidOrder', () => {
     sendcloudConfigMock.labelMode = 'test';
   });
 
-  it('uses the Sendcloud test label method in test mode', async () => {
+  it('uses the Sendcloud test label method without a service point in test mode', async () => {
     const { service, sendcloudService, shipmentRepository } = createService();
 
     await service.createShipmentForPaidOrder(order);
@@ -106,6 +106,11 @@ describe('ShipmentService.createShipmentForPaidOrder', () => {
           id: 8,
           name: 'Unstamped letter',
         },
+      }),
+    );
+    expect(sendcloudService.createParcel).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        to_service_point: expect.anything(),
       }),
     );
     expect(shipmentRepository.createShipment).toHaveBeenCalledWith(
@@ -130,6 +135,7 @@ describe('ShipmentService.createShipmentForPaidOrder', () => {
           id: 12345,
           name: 'InPost locker',
         },
+        to_service_point: 999,
       }),
     );
   });

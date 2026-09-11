@@ -39,10 +39,13 @@ export class NotificationService {
     const labelPdf = await this.sendcloudService.downloadLabelPdf(
       shipment.labelUrl,
     );
+    console.log(
+      `Downloaded Sendcloud label PDF for order ${order.id}: ${labelPdf.length} bytes`,
+    );
 
     return this.emailService.sendSellerItemSoldEmail({
       to: seller.email,
-      sellerName: seller.displayName,
+      sellerName: seller.displayName || seller.firstname,
       productName: order.productName,
       orderId: order.id,
       labelAttachment: {

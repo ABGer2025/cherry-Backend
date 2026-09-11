@@ -3,6 +3,7 @@ export interface User {
     firebaseUid: string;
     email: string;
     displayName: string;
+    firstname?: string;
     photoURL?: string;
     address?: {
         fullName: string;

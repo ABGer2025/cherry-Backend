@@ -432,6 +432,8 @@ export const createOrder = async (
       );
       return;
     } catch (err) {
+      console.error('Shipment creation failed after order creation:', err);
+
       await orderRepo.updateOrder(savedOrder.id, {
         shipmentStatus: 'pending',
         status: 'shipment_pending',

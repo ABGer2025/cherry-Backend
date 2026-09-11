@@ -65,12 +65,8 @@ export const createTestParcel = async (
 ): Promise<void> => {
   try {
     const { parcel } = req.body as { parcel: any };
-    const testParcel = {
-      ...parcel,
-      request_label: false,
-    };
     const sendcloudService = new SendcloudService();
-    const sendcloudParcel = await sendcloudService.createParcel(testParcel);
+    const sendcloudParcel = await sendcloudService.createParcel(parcel);
 
     ResponseHandler.success(
       res,

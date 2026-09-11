@@ -61,7 +61,9 @@ export class ShipmentService {
       },
     ];
 
-    parcelData.to_service_point = Number(order.pickupPoint.id);
+    if (labelMode !== 'test') {
+      parcelData.to_service_point = Number(order.pickupPoint.id);
+    }
 
     const sendcloudParcel =
       await this.sendcloudService.createParcel(parcelData);
