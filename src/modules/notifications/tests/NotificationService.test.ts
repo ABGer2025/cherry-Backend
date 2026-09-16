@@ -93,12 +93,11 @@ describe('NotificationService.sendSellerLabelEmail', () => {
     expect(emailService.sendSellerItemSoldEmail).not.toHaveBeenCalled();
   });
 
-  it('falls back to the legacy seller firstname field', async () => {
+  it('prefers the seller firstname over displayName', async () => {
     const { service, emailService } = createService();
 
     await service.sendSellerLabelEmail(order, {
       ...seller,
-      displayName: undefined as any,
       firstname: 'Kilo',
     }, shipment);
 

@@ -45,7 +45,7 @@ export class NotificationService {
 
     return this.emailService.sendSellerItemSoldEmail({
       to: seller.email,
-      sellerName: seller.displayName || seller.firstname,
+      sellerName: seller.firstname || seller.displayName,
       productName: order.productName,
       orderId: order.id,
       labelAttachment: {
