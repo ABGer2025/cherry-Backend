@@ -11,6 +11,8 @@ import { PostcodeLookupService } from '../services/postcode/PostcodeLookupServic
 import { ProductRepository } from '../../products/repositories/ProductRepository';
 import { PostageSizeRepository } from '../../postage-sizes/repositories/PostageSizeRepository';
 import { UserRepository } from '../../auth/repositories/UserRepository';
+import { EmailService } from '../../notifications/services/EmailService';
+import { Order } from '../../order/model/Order';
 
 const checkoutShippingService = new CheckoutShippingService();
 const postcodeLookupService = new PostcodeLookupService();
@@ -63,12 +65,8 @@ export const createTestParcel = async (
 ): Promise<void> => {
   try {
     const { parcel } = req.body as { parcel: any };
-    const testParcel = {
-      ...parcel,
-      request_label: false,
-    };
     const sendcloudService = new SendcloudService();
-    const sendcloudParcel = await sendcloudService.createParcel(testParcel);
+    const sendcloudParcel = await sendcloudService.createParcel(parcel);
 
     ResponseHandler.success(
       res,
@@ -84,7 +82,6 @@ export const createTestParcel = async (
     );
   }
 };
-
 
 export const getCheckoutShippingOptions = async (
   req: Request,
@@ -130,7 +127,10 @@ export const getCheckoutShippingOptions = async (
       country,
       postalCode,
       weightGrams: postageSize.weight,
-      isReturn: isReturn === undefined ? undefined : String(isReturn).toLowerCase() === 'true',
+      isReturn:
+        isReturn === undefined
+          ? undefined
+          : String(isReturn).toLowerCase() === 'true',
       carrier: ENFORCED_CARRIER,
     });
 
@@ -154,8 +154,7 @@ export const getPickupPoints = async (
   res: Response,
 ): Promise<void> => {
   try {
-    const { country, address, radius } =
-      req.query as Record<string, string>;
+    const { country, address, radius } = req.query as Record<string, string>;
 
     const pickupPoints = await checkoutShippingService.getPickupPoints({
       country,
@@ -178,7 +177,6 @@ export const getPickupPoints = async (
     );
   }
 };
-
 
 export const handleSendcloudWebhook = async (
   req: Request,
@@ -212,7 +210,9 @@ export const handleSendcloudWebhook = async (
       const shipment = await shipmentRepo.getShipmentBySendcloudId(parcel.id);
 
       if (shipment) {
-        const status = mapSendcloudStatusToShipmentStatus(parcel.status?.message);
+        const status = mapSendcloudStatusToShipmentStatus(
+          parcel.status?.message,
+        );
 
         await shipmentRepo.updateShipment(shipment.id, {
           status,
@@ -221,7 +221,8 @@ export const handleSendcloudWebhook = async (
         });
 
         const orderRepo = new OrderRepository();
-        await orderRepo.updateOrder(shipment.orderId, {
+        const order = await orderRepo.getOrderById(shipment.orderId);
+        const orderUpdates: Partial<Order> = {
           shipmentStatus: status,
           shipmentId: shipment.id,
           status:
@@ -234,7 +235,33 @@ export const handleSendcloudWebhook = async (
                   : status === 'pending' || status === 'announced'
                     ? 'shipment_created'
                     : 'shipped',
-        });
+        };
+
+        await orderRepo.updateOrder(shipment.orderId, orderUpdates);
+
+        if (
+          status === 'delivered' &&
+          order &&
+          !order.buyerDeliveryEmailSentAt
+        ) {
+          try {
+            const buyer = await userRepo.getById(order.userId);
+            const result = await new EmailService().sendBuyerDeliveredEmail({
+              to: order.email,
+              buyerName: buyer?.firstname || buyer?.displayName,
+              productName: order.productName,
+              orderId: order.id,
+            });
+
+            if (result.sent) {
+              await orderRepo.updateOrder(shipment.orderId, {
+                buyerDeliveryEmailSentAt: new Date(),
+              });
+            }
+          } catch (err) {
+            console.error('Failed to send buyer delivered email:', err);
+          }
+        }
 
         console.log(`Updated shipment ${shipment.id} to status: ${status}`);
       }
@@ -246,7 +273,6 @@ export const handleSendcloudWebhook = async (
     res.status(500).json({ error: 'Webhook processing failed' });
   }
 };
-
 
 export const validatePostcode = async (
   req: Request,

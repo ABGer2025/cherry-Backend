@@ -269,6 +269,40 @@ export class SendcloudService {
     }
   }
 
+  async downloadLabelPdf(labelUrl: string): Promise<Buffer> {
+    try {
+      this.assertSendcloudLabelUrl(labelUrl);
+
+      const response = await this.client.get(labelUrl, {
+        responseType: 'arraybuffer',
+        headers: {
+          Accept: 'application/pdf',
+        },
+      });
+
+      return Buffer.from(response.data);
+    } catch (error: any) {
+      const errorMessage =
+        error.response?.data?.error?.message ||
+        error.response?.data?.message ||
+        error.message;
+      throw new Error(`Sendcloud API Error: ${errorMessage}`);
+    }
+  }
+
+  private assertSendcloudLabelUrl(labelUrl: string): void {
+    const label = new URL(labelUrl);
+    const api = new URL(sendcloudConfig.apiUrl);
+
+    if (
+      label.protocol !== 'https:' ||
+      label.hostname !== api.hostname ||
+      !label.pathname.startsWith(`${api.pathname}/labels/`)
+    ) {
+      throw new Error('Invalid Sendcloud label URL');
+    }
+  }
+
   async getTrackingInfo(trackingNumber: string): Promise<any> {
     try {
       const response = await this.client.get('/parcels', {
