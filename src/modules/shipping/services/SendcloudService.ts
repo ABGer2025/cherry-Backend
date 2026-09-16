@@ -273,12 +273,11 @@ export class SendcloudService {
     try {
       this.assertSendcloudLabelUrl(labelUrl);
 
-      const response = await axios.get<ArrayBuffer>(labelUrl, {
+      const response = await this.client.get(labelUrl, {
         responseType: 'arraybuffer',
         headers: {
           Accept: 'application/pdf',
         },
-        timeout: 30000,
       });
 
       return Buffer.from(response.data);

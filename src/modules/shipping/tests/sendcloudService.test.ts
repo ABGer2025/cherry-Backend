@@ -120,19 +120,18 @@ describe('SendcloudService.getPickupPoints()', () => {
     const pdf = Buffer.from('%PDF');
     const labelUrl =
       'https://panel.sendcloud.sc/api/v2/labels/normal_printer/1';
-    (axios.get as jest.Mock).mockResolvedValue({ data: pdf });
+    mockGet.mockResolvedValue({ data: pdf });
 
     const result = await service.downloadLabelPdf(labelUrl);
 
     expect(result).toEqual(pdf);
-    expect(axios.get).toHaveBeenCalledWith(labelUrl, {
+    expect(mockGet).toHaveBeenCalledWith(labelUrl, {
       responseType: 'arraybuffer',
       headers: {
         Accept: 'application/pdf',
       },
-      timeout: 30000,
     });
-    expect(mockGet).not.toHaveBeenCalledWith(labelUrl, expect.anything());
+    expect(axios.get).not.toHaveBeenCalled();
   });
 
   it('rejects non-Sendcloud label URLs before download', async () => {
