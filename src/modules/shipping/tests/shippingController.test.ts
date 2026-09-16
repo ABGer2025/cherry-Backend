@@ -85,6 +85,7 @@ describe('shippingController', () => {
     mockGetUserById.mockResolvedValue({
       id: 'user-1',
       email: 'buyer@example.com',
+      firstname: 'Buyer',
       displayName: 'Buyer Name',
     });
     mockSendBuyerDeliveredEmail.mockResolvedValue({
@@ -207,7 +208,7 @@ describe('shippingController', () => {
     });
     expect(mockSendBuyerDeliveredEmail).toHaveBeenCalledWith({
       to: 'buyer@example.com',
-      buyerName: 'Buyer Name',
+      buyerName: 'Buyer',
       productName: 'Winter Coat',
       orderId: 'order-1',
     });

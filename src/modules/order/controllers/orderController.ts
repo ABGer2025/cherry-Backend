@@ -399,7 +399,7 @@ export const createOrder = async (
       try {
         const result = await emailService.sendBuyerShipmentStartedEmail({
           to: email,
-          buyerName: dbUser.displayName,
+          buyerName: dbUser.firstname || dbUser.displayName,
           productName: savedOrder.productName,
           orderId: savedOrder.id,
           trackingNumber: shipment.trackingNumber,

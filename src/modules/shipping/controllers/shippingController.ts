@@ -248,7 +248,7 @@ export const handleSendcloudWebhook = async (
             const buyer = await userRepo.getById(order.userId);
             const result = await new EmailService().sendBuyerDeliveredEmail({
               to: order.email,
-              buyerName: buyer?.displayName,
+              buyerName: buyer?.firstname || buyer?.displayName,
               productName: order.productName,
               orderId: order.id,
             });

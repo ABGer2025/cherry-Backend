@@ -132,6 +132,7 @@ describe('orderController.createOrder', () => {
       return Promise.resolve({
         id: 'user-1',
         email: 'user@example.com',
+        firstname: 'Jane',
         displayName: 'Jane Doe',
       });
     });
@@ -256,7 +257,7 @@ describe('orderController.createOrder', () => {
     );
     expect(mockSendBuyerShipmentStartedEmail).toHaveBeenCalledWith({
       to: 'user@example.com',
-      buyerName: 'Jane Doe',
+      buyerName: 'Jane',
       productName: 'Winter Coat',
       orderId: 'order-1',
       trackingNumber: 'TRACK123',
