@@ -12,6 +12,12 @@ export class UserBlockRepository {
   constructor(private readonly db = firestore) {}
 
   private id(blockerId: string, blockedUserId: string): string {
+    return Buffer.from(JSON.stringify([blockerId, blockedUserId])).toString(
+      'base64url',
+    );
+  }
+
+  private legacyId(blockerId: string, blockedUserId: string): string {
     return `${encodeURIComponent(blockerId)}__${encodeURIComponent(blockedUserId)}`;
   }
 
@@ -30,7 +36,31 @@ export class UserBlockRepository {
   }
 
   async unblock(blockerId: string, blockedUserId: string): Promise<void> {
-    await this.db.collection('user_blocks').doc(this.id(blockerId, blockedUserId)).delete();
+    const collection = this.db.collection('user_blocks');
+    await collection.doc(this.id(blockerId, blockedUserId)).delete();
+    const legacyRef = collection.doc(this.legacyId(blockerId, blockedUserId));
+    const legacyDoc = await legacyRef.get();
+    const legacy = legacyDoc.exists ? legacyDoc.data() : null;
+    if (
+      legacy?.blockerId === blockerId &&
+      legacy?.blockedUserId === blockedUserId
+    ) {
+      await legacyRef.delete();
+    }
+  }
+
+  async isBlocked(blockerId: string, blockedUserId: string): Promise<boolean> {
+    const collection = this.db.collection('user_blocks');
+    const doc = await collection.doc(this.id(blockerId, blockedUserId)).get();
+    if (doc.exists) return true;
+
+    const legacyDoc = await collection
+      .doc(this.legacyId(blockerId, blockedUserId))
+      .get();
+    const legacy = legacyDoc.exists ? legacyDoc.data() : null;
+    return (
+      legacy?.blockerId === blockerId && legacy?.blockedUserId === blockedUserId
+    );
   }
 
   async listBlockedUsers(blockerId: string): Promise<UserBlock[]> {

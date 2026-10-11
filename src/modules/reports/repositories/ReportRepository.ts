@@ -86,6 +86,9 @@ export class ReportRepository {
     if (status === 'resolved' || status === 'rejected') {
       updates.resolvedAt = FieldValue.serverTimestamp();
       updates.resolvedBy = adminId;
+    } else {
+      updates.resolvedAt = FieldValue.delete();
+      updates.resolvedBy = FieldValue.delete();
     }
     await ref.update(updates);
     return this.getById(id);

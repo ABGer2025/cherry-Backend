@@ -5,6 +5,9 @@ import {
 
 const mockModerateProduct = jest.fn();
 const mockModerateUser = jest.fn();
+const errorLog = jest
+  .spyOn(console, 'error')
+  .mockImplementation(() => undefined);
 
 jest.mock('../repositories/ModerationRepository', () => ({
   ModerationRepository: jest.fn().mockImplementation(() => ({
@@ -23,6 +26,7 @@ const response = () => {
 describe('moderationController', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    errorLog.mockClear();
   });
 
   it('hides a product', async () => {
@@ -67,5 +71,27 @@ describe('moderationController', () => {
       'admin-1',
       'harassment',
     );
+  });
+
+  it('does not return raw moderation errors', async () => {
+    mockModerateProduct.mockRejectedValue(
+      new Error('firestore private@example.org internal-index-detail'),
+    );
+    const res = response();
+
+    await moderateProduct(
+      {
+        user: { uid: 'admin-1' },
+        params: { productId: 'product-1' },
+        body: { action: 'hide', reason: 'prohibited_content' },
+      } as any,
+      res,
+    );
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(JSON.stringify(res.json.mock.calls)).not.toMatch(
+      /private@example.org|internal-index-detail/,
+    );
+    expect(errorLog).toHaveBeenCalledWith('moderation.product_failed');
   });
 });

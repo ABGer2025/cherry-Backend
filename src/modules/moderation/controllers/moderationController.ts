@@ -38,12 +38,9 @@ export const moderateProduct = async (
       return;
     }
     ResponseHandler.success(res, { productId, action }, 'Product moderation saved');
-  } catch (error) {
-    ResponseHandler.internalServerError(
-      res,
-      'Failed to moderate product',
-      error instanceof Error ? error.message : 'Unknown error',
-    );
+  } catch {
+    console.error('moderation.product_failed');
+    ResponseHandler.internalServerError(res, 'Failed to moderate product');
   }
 };
 
@@ -76,11 +73,8 @@ export const moderateUser = async (
       return;
     }
     ResponseHandler.success(res, { userId, action }, 'User moderation saved');
-  } catch (error) {
-    ResponseHandler.internalServerError(
-      res,
-      'Failed to moderate user',
-      error instanceof Error ? error.message : 'Unknown error',
-    );
+  } catch {
+    console.error('moderation.user_failed');
+    ResponseHandler.internalServerError(res, 'Failed to moderate user');
   }
 };

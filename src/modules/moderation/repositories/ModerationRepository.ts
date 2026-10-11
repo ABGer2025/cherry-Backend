@@ -53,6 +53,15 @@ export class ModerationRepository {
     }
 
     const suspended = action === 'suspend';
+    let authUserExists = true;
+    try {
+      await admin.auth().updateUser(userId, { disabled: suspended });
+    } catch (error: any) {
+      if (error?.code !== 'auth/user-not-found') throw error;
+      authUserExists = false;
+      if (!userRef) return false;
+    }
+
     if (userRef) {
       await userRef.update({
         status: suspended ? 'suspended' : 'active',
@@ -63,12 +72,6 @@ export class ModerationRepository {
         moderationUpdatedBy: adminId,
       });
     }
-    try {
-      await admin.auth().updateUser(userId, { disabled: suspended });
-    } catch (error: any) {
-      if (error?.code !== 'auth/user-not-found') throw error;
-      if (!userRef) return false;
-    }
-    return Boolean(userRef) || action === 'restore' || action === 'suspend';
+    return authUserExists || Boolean(userRef);
   }
 }

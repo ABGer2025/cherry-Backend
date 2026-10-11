@@ -35,10 +35,10 @@ jest.mock('../../postage-sizes/routes/postageSizeRoutes', () =>
 jest.mock('../../notifications/routes/notificationRoutes', () =>
   require('express').Router(),
 );
-const getBlockedUserIds = jest.fn();
+const isBlocked = jest.fn();
 jest.mock('../../blocks/repositories/UserBlockRepository', () => ({
   UserBlockRepository: jest.fn().mockImplementation(() => ({
-    getBlockedUserIds,
+    isBlocked,
   })),
 }));
 jest.mock('../../payment/controllers/paymentController', () => ({
@@ -91,7 +91,7 @@ beforeEach(() => {
   getProducts
     .mockReset()
     .mockResolvedValue({ products: [product], nextPosition: null });
-  getBlockedUserIds.mockReset().mockResolvedValue(new Set());
+  isBlocked.mockReset().mockResolvedValue(false);
   errorLog.mockClear();
 });
 
@@ -119,7 +119,7 @@ describe('Mounted user profile routes', () => {
     const response = await authenticated(productsPath);
     expect(response.status).toBe(200);
     expect(response.headers['cache-control']).toBe('private, no-store');
-    expect(getBlockedUserIds).toHaveBeenCalledWith('viewer-uid');
+    expect(isBlocked).toHaveBeenCalledWith('viewer-uid', 'seller-uid');
     expect(getUser).toHaveBeenCalledWith('seller-uid');
     expect(getProducts).toHaveBeenCalledWith('seller-uid', 20, undefined);
     expect(response.body).toEqual({
@@ -131,7 +131,7 @@ describe('Mounted user profile routes', () => {
   });
 
   it('returns an empty products page when the viewer blocked the seller', async () => {
-    getBlockedUserIds.mockResolvedValue(new Set(['seller-uid']));
+    isBlocked.mockResolvedValue(true);
 
     const response = await authenticated(productsPath);
 

@@ -48,12 +48,9 @@ export const createReport = async (req: Request, res: Response): Promise<void> =
       message,
     });
     ResponseHandler.created(res, { report }, 'Report submitted');
-  } catch (error) {
-    ResponseHandler.internalServerError(
-      res,
-      'Failed to submit report',
-      error instanceof Error ? error.message : 'Unknown error',
-    );
+  } catch {
+    console.error('reports.create_failed');
+    ResponseHandler.internalServerError(res, 'Failed to submit report');
   }
 };
 
@@ -90,11 +87,8 @@ export const listAdminReports = async (
       ResponseHandler.badRequest(res, 'Report cursor was not found');
       return;
     }
-    ResponseHandler.internalServerError(
-      res,
-      'Failed to fetch reports',
-      error instanceof Error ? error.message : 'Unknown error',
-    );
+    console.error('reports.list_failed');
+    ResponseHandler.internalServerError(res, 'Failed to fetch reports');
   }
 };
 
@@ -114,12 +108,9 @@ export const getAdminReport = async (
       return;
     }
     ResponseHandler.success(res, { report }, 'Report fetched');
-  } catch (error) {
-    ResponseHandler.internalServerError(
-      res,
-      'Failed to fetch report',
-      error instanceof Error ? error.message : 'Unknown error',
-    );
+  } catch {
+    console.error('reports.get_failed');
+    ResponseHandler.internalServerError(res, 'Failed to fetch report');
   }
 };
 
@@ -153,11 +144,8 @@ export const updateAdminReportStatus = async (
       return;
     }
     ResponseHandler.success(res, { report }, 'Report updated');
-  } catch (error) {
-    ResponseHandler.internalServerError(
-      res,
-      'Failed to update report',
-      error instanceof Error ? error.message : 'Unknown error',
-    );
+  } catch {
+    console.error('reports.update_failed');
+    ResponseHandler.internalServerError(res, 'Failed to update report');
   }
 };

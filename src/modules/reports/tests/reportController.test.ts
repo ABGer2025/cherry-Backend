@@ -7,6 +7,9 @@ import {
 const mockCreate = jest.fn();
 const mockList = jest.fn();
 const mockUpdateStatus = jest.fn();
+const errorLog = jest
+  .spyOn(console, 'error')
+  .mockImplementation(() => undefined);
 
 jest.mock('../repositories/ReportRepository', () => ({
   ReportRepository: jest.fn().mockImplementation(() => ({
@@ -26,6 +29,7 @@ const response = () => {
 describe('reportController', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    errorLog.mockClear();
   });
 
   it('creates a product report for the authenticated user', async () => {
@@ -66,6 +70,31 @@ describe('reportController', () => {
 
     expect(res.status).toHaveBeenCalledWith(400);
     expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('does not return raw report creation errors', async () => {
+    mockCreate.mockRejectedValue(
+      new Error('firestore private@example.org internal-index-detail'),
+    );
+    const res = response();
+
+    await createReport(
+      {
+        user: { uid: 'user-1' },
+        body: {
+          targetType: 'product',
+          targetId: 'product-1',
+          reason: 'prohibited_item',
+        },
+      } as any,
+      res,
+    );
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(JSON.stringify(res.json.mock.calls)).not.toMatch(
+      /private@example.org|internal-index-detail/,
+    );
+    expect(errorLog).toHaveBeenCalledWith('reports.create_failed');
   });
 
   it('lists admin reports with filters', async () => {

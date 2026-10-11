@@ -21,7 +21,7 @@ export class UserProfileService {
     private readonly cursors: UserProductCursor = new UserProductCursor(),
     private readonly blocks: Pick<
       UserBlockRepository,
-      'getBlockedUserIds'
+      'isBlocked'
     > = new UserBlockRepository(),
   ) {}
 
@@ -41,8 +41,7 @@ export class UserProfileService {
     query: UserProductsQuery,
   ): Promise<UserProductsPage | null> {
     const cursor = this.cursors.decode(query.cursor, ownerId, viewerId);
-    const blockedUserIds = await this.blocks.getBlockedUserIds(viewerId);
-    if (blockedUserIds.has(ownerId)) {
+    if (await this.blocks.isBlocked(viewerId, ownerId)) {
       return {
         data: { products: [] },
         meta: { limit: query.limit, nextCursor: null, hasMore: false },
