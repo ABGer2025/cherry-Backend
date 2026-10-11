@@ -61,9 +61,9 @@ export class UserProductCursor {
     ownerId: string,
     viewerId: string,
   ): UserProductPosition | undefined {
+    if (token === undefined) return undefined;
     // Missing configuration remains an operational error, not a bad cursor.
     const key = this.key();
-    if (token === undefined) return undefined;
     try {
       if (!/^[A-Za-z0-9_-]{40,4096}$/.test(token)) throw new Error();
       const bytes = Buffer.from(token, 'base64url');

@@ -336,14 +336,23 @@ describe('Mounted user profile routes', () => {
     expect(getProducts).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps missing cursor configuration as a retryable products error', async () => {
+  it('loads the first products page without cursor configuration', async () => {
     delete process.env.USER_PRODUCTS_CURSOR_KEY;
+    const response = await authenticated(productsPath);
+    expect(response.status).toBe(200);
+    expect(response.body.data.products).toHaveLength(1);
+  });
+
+  it('keeps missing cursor configuration as a retryable products error when a next cursor is needed', async () => {
+    delete process.env.USER_PRODUCTS_CURSOR_KEY;
+    getProducts.mockResolvedValueOnce({
+      products: [product],
+      nextPosition: { seconds: 100, nanoseconds: 123456789, id: 'listing-id' },
+    });
     const response = await authenticated(productsPath);
     expect(response.status).toBe(503);
     expect(response.body).not.toHaveProperty('data');
-    expect(getUser).not.toHaveBeenCalled();
   });
-
 });
 
 describe('User profile Swagger', () => {
