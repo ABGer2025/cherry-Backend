@@ -1,14 +1,23 @@
 import { firestore } from '../../../shared/config/firebaseConfig';
 import { FieldValue } from 'firebase-admin/firestore';
 import { gbpToPence } from '../../../shared/utils/money';
+import { FulfillmentJob } from '../model/FulfillmentJob';
 import { Order } from '../model/Order';
 
 const PAYMENT_RESERVATION_MS = 15 * 60 * 1000;
+const FULFILLMENT_LEASE_MS = 10 * 60 * 1000;
 
 export class PendingOrderUnavailableError extends Error {
   constructor(reason: 'expired' | 'unavailable' | 'not_payable') {
     super(`Pending order cannot be finalized: ${reason}`);
     this.name = 'PendingOrderUnavailableError';
+  }
+}
+
+export class FulfillmentJobBusyError extends Error {
+  constructor(orderId: string) {
+    super(`Fulfillment job for order ${orderId} is already being processed`);
+    this.name = 'FulfillmentJobBusyError';
   }
 }
 
@@ -42,8 +51,15 @@ export type CreatePendingOrderInput = Pick<
 >;
 
 export class OrderRepository {
-  async createPendingOrder(input: CreatePendingOrderInput): Promise<Order> {
-    const orderRef = firestore.collection('orders').doc();
+  createOrderId(): string {
+    return firestore.collection('orders').doc().id;
+  }
+
+  async createPendingOrder(
+    orderId: string,
+    input: CreatePendingOrderInput,
+  ): Promise<Order> {
+    const orderRef = firestore.collection('orders').doc(orderId);
     const productRef = firestore.collection('products').doc(input.productId);
     const pendingOrdersQuery = firestore
       .collection('orders')
@@ -51,11 +67,15 @@ export class OrderRepository {
       .where('status', '==', 'pending_payment');
 
     return firestore.runTransaction(async (transaction) => {
-      const [pendingOrders, productDoc] = await Promise.all([
+      const [orderDoc, pendingOrders, productDoc] = await Promise.all([
+        transaction.get(orderRef),
         transaction.get(pendingOrdersQuery),
         transaction.get(productRef),
       ]);
 
+      if (orderDoc.exists) {
+        throw new Error('Order already exists');
+      }
       if (!productDoc.exists) {
         throw new Error('Product not found');
       }
@@ -197,14 +217,18 @@ export class OrderRepository {
     userId: string,
   ): Promise<Order> {
     const orderRef = firestore.collection('orders').doc(orderId);
+    const fulfillmentJobRef = firestore
+      .collection('order_fulfillment_jobs')
+      .doc(orderId);
     const paymentLockRef = firestore
       .collection('order_payment_intents')
       .doc(paymentIntentId);
 
     const result = await firestore.runTransaction(async (transaction) => {
-      const [orderDoc, paymentLock] = await Promise.all([
+      const [orderDoc, paymentLock, fulfillmentJobDoc] = await Promise.all([
         transaction.get(orderRef),
         transaction.get(paymentLockRef),
+        transaction.get(fulfillmentJobRef),
       ]);
 
       if (!orderDoc.exists) {
@@ -219,6 +243,12 @@ export class OrderRepository {
         if (orderData.paymentIntentId !== paymentIntentId) {
           throw new Error('Order is linked to a different payment');
         }
+        if (!fulfillmentJobDoc.exists) {
+          transaction.create(
+            fulfillmentJobRef,
+            this.createFulfillmentJobData(orderId, new Date(), orderData),
+          );
+        }
         return this.mapToOrder(orderId, orderData);
       }
       if (paymentLock.exists) {
@@ -232,6 +262,9 @@ export class OrderRepository {
       }
       if (orderData.status !== 'pending_payment') {
         throw new PendingOrderUnavailableError('not_payable');
+      }
+      if (fulfillmentJobDoc.exists) {
+        throw new Error('Fulfillment job already exists for unpaid order');
       }
 
       const productRef = firestore
@@ -304,6 +337,10 @@ export class OrderRepository {
         userId,
         createdAt: now,
       });
+      transaction.create(
+        fulfillmentJobRef,
+        this.createFulfillmentJobData(orderId, now),
+      );
 
       return {
         id: orderId,
@@ -324,6 +361,88 @@ export class OrderRepository {
       throw new PendingOrderUnavailableError('unavailable');
     }
     return result;
+  }
+
+  async getFulfillmentJob(orderId: string): Promise<FulfillmentJob | null> {
+    const jobDoc = await firestore
+      .collection('order_fulfillment_jobs')
+      .doc(orderId)
+      .get();
+    if (!jobDoc.exists) {
+      return null;
+    }
+    return {
+      orderId,
+      ...jobDoc.data(),
+    } as FulfillmentJob;
+  }
+
+  async claimFulfillmentJob(orderId: string): Promise<'claimed' | 'completed'> {
+    const jobRef = firestore
+      .collection('order_fulfillment_jobs')
+      .doc(orderId);
+    return firestore.runTransaction(async (transaction) => {
+      const jobDoc = await transaction.get(jobRef);
+      if (!jobDoc.exists) {
+        throw new Error(`Fulfillment job for order ${orderId} was not found`);
+      }
+
+      const job = jobDoc.data()!;
+      if (job.status === 'completed') {
+        return 'completed';
+      }
+
+      const now = new Date();
+      const leaseUntil = this.toDate(job.leaseUntil);
+      if (job.status === 'processing' && leaseUntil && leaseUntil > now) {
+        throw new FulfillmentJobBusyError(orderId);
+      }
+
+      transaction.update(jobRef, {
+        status: 'processing',
+        attempts: (typeof job.attempts === 'number' ? job.attempts : 0) + 1,
+        leaseUntil: new Date(now.getTime() + FULFILLMENT_LEASE_MS),
+        updatedAt: now,
+      });
+      return 'claimed';
+    });
+  }
+
+  async updateFulfillmentJob(
+    orderId: string,
+    updates: Partial<FulfillmentJob>,
+  ): Promise<void> {
+    await firestore
+      .collection('order_fulfillment_jobs')
+      .doc(orderId)
+      .update({
+        ...updates,
+        updatedAt: new Date(),
+      });
+  }
+
+  async retryFulfillmentJob(orderId: string, error: unknown): Promise<void> {
+    await firestore
+      .collection('order_fulfillment_jobs')
+      .doc(orderId)
+      .update({
+        status: 'pending',
+        leaseUntil: FieldValue.delete(),
+        lastError: error instanceof Error ? error.message : String(error),
+        updatedAt: new Date(),
+      });
+  }
+
+  async completeFulfillmentJob(orderId: string): Promise<void> {
+    await firestore
+      .collection('order_fulfillment_jobs')
+      .doc(orderId)
+      .update({
+        status: 'completed',
+        leaseUntil: FieldValue.delete(),
+        lastError: null,
+        updatedAt: new Date(),
+      });
   }
 
   async getOrderById(id: string): Promise<Order | null> {
@@ -372,6 +491,26 @@ export class OrderRepository {
       .get();
 
     return snapshot.docs.map((doc) => this.mapToOrder(doc.id, doc.data()));
+  }
+
+  private createFulfillmentJobData(
+    orderId: string,
+    now = new Date(),
+    orderData?: FirebaseFirestore.DocumentData,
+  ) {
+    return {
+      orderId,
+      status: 'pending' as const,
+      attempts: 0,
+      shipmentCompleted: Boolean(orderData?.shipmentId),
+      sellerNotificationCompleted: Boolean(orderData?.sellerSoldEmailSentAt),
+      buyerNotificationCompleted: Boolean(
+        orderData?.buyerShipmentStartedEmailSentAt,
+      ),
+      lastError: null,
+      createdAt: now,
+      updatedAt: now,
+    };
   }
 
   private mapToOrder(id: string, data: FirebaseFirestore.DocumentData): Order {

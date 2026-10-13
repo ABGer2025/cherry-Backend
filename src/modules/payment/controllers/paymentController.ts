@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { ResponseHandler } from '../../../shared/utils/responseHandler';
 import { createWebhook } from '../../../shared/config/stripeConfig';
 import { PaymentService } from '../services/PaymentService';
+import { OrderRepository } from '../../order/repositories/OrderRepository';
 import Stripe from 'stripe';
 
 export const createPaymentIntent = async (req: Request, res: Response): Promise<void> => {
@@ -9,9 +10,11 @@ export const createPaymentIntent = async (req: Request, res: Response): Promise<
     const user = (req as any).user;
     const firebaseUid = user.uid;
 
+    const orderId = new OrderRepository().createOrderId();
     const paymentService = new PaymentService();
     const responseData = await paymentService.createPaymentIntentForUserByUid(
       firebaseUid,
+      orderId,
       req.body,
     );
 

@@ -1,17 +1,19 @@
 import { Request, Response } from 'express';
 import { ResponseHandler } from '../../../shared/utils/responseHandler';
 import { UserRepository } from '../../auth/repositories/UserRepository';
-import { OrderRepository } from '../repositories/OrderRepository';
-import { ShipmentService } from '../../shipping/services/ShipmentService';
+import {
+  FulfillmentJobBusyError,
+  OrderRepository,
+} from '../repositories/OrderRepository';
 import { PaymentService } from '../../payment/services/PaymentService';
 import { ShipmentRepository } from '../../shipping/repositories/ShipmentRepository';
 import { Shipment } from '../../shipping/models/Shipment';
 import { Order, OrderDisputeReason } from '../model/Order';
 import { requireSingleParam } from '../../../shared/utils/requestParam';
-import { EmailService } from '../../notifications/services/EmailService';
-import { NotificationService } from '../../notifications/services/NotificationService';
 import { DisputeRepository } from '../../../disputes/DisputeRepository';
 import { DisputeSubmissionError } from '../../../disputes/Dispute';
+import { FulfillmentTaskQueue } from '../services/FulfillmentTaskQueue';
+import { OrderFulfillmentService } from '../services/OrderFulfillmentService';
 
 const getDeliveryState = (
   order: Order,
@@ -197,7 +199,6 @@ export const createOrder = async (
       return;
     }
 
-    const email = dbUser.email;
     const { orderId, paymentIntentId } = req.body;
 
     const paymentService = new PaymentService();
@@ -291,94 +292,40 @@ export const createOrder = async (
       throw err;
     }
 
-    const shipmentService = new ShipmentService();
-
+    const fulfillmentQueue = new FulfillmentTaskQueue();
+    await fulfillmentQueue.enqueue(savedOrder.id);
     try {
-      const { shipment, sendcloudParcel } =
-        await shipmentService.createShipmentForPaidOrder(savedOrder);
-
-      await orderRepo.updateOrder(savedOrder.id, {
-        shipmentId: shipment.id,
-        shipmentStatus: shipment.status,
-        status: 'shipment_created',
-      });
-
-      const emailService = new EmailService();
-      const notificationService = new NotificationService(emailService);
-      const emailUpdates: Partial<Order> = {};
-
-      try {
-        const seller = await userRepo.getById(savedOrder.sellerId);
-        if (seller && !savedOrder.sellerSoldEmailSentAt) {
-          const result = await notificationService.sendSellerLabelEmail(
-            savedOrder,
-            seller,
-            shipment,
-          );
-
-          if (result.sent) {
-            emailUpdates.sellerSoldEmailSentAt = new Date();
-          }
-        } else {
-          console.warn(`Seller profile not found for order ${savedOrder.id}`);
-        }
-      } catch (err) {
-        console.error('Failed to send seller item sold email:', err);
-      }
-
-      try {
-        if (!savedOrder.buyerShipmentStartedEmailSentAt) {
-          const result = await emailService.sendBuyerShipmentStartedEmail({
-            to: email,
-            buyerName: dbUser.firstname || dbUser.displayName,
-            productName: savedOrder.productName,
-            orderId: savedOrder.id,
-            trackingNumber: shipment.trackingNumber,
-            trackingUrl: shipment.trackingUrl,
-          });
-
-          if (result.sent) {
-            emailUpdates.buyerShipmentStartedEmailSentAt = new Date();
-          }
-        }
-      } catch (err) {
-        console.error('Failed to send buyer shipment started email:', err);
-      }
-
-      if (Object.keys(emailUpdates).length > 0) {
-        try {
-          await orderRepo.updateOrder(savedOrder.id, emailUpdates);
-        } catch (err) {
-          console.error('Failed to update order email timestamps:', err);
-        }
+      const fulfillment =
+        await new OrderFulfillmentService().processPaidOrder(savedOrder.id);
+      if (!fulfillment.shipment) {
+        throw new Error(
+          `Fulfillment completed without a shipment for order ${savedOrder.id}`,
+        );
       }
 
       ResponseHandler.success(
         res,
         {
           orderId: savedOrder.id,
-          shipment,
-          sendcloudParcel,
+          shipment: fulfillment.shipment,
+          sendcloudParcel: fulfillment.sendcloudParcel,
         },
         'Order and shipment created successfully',
       );
       return;
     } catch (err) {
-      console.error('Shipment creation failed after order creation:', err);
-
-      await orderRepo.updateOrder(savedOrder.id, {
-        shipmentStatus: 'pending',
-        status: 'shipment_pending',
-      });
+      if (!(err instanceof FulfillmentJobBusyError)) {
+        console.error('Order fulfillment is pending retry:', err);
+      }
 
       ResponseHandler.custom(
         res,
         202,
         true,
-        'Order created, shipment pending',
+        'Order paid; fulfillment is queued for retry',
         {
           orderId: savedOrder.id,
-          shipmentStatus: 'pending',
+          fulfillmentStatus: 'pending',
         },
         err instanceof Error ? err.message : 'Shipment creation failed',
       );

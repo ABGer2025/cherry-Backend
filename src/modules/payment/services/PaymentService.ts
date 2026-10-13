@@ -12,6 +12,7 @@ import {
   PendingOrderUnavailableError,
 } from '../../order/repositories/OrderRepository';
 import { Order } from '../../order/model/Order';
+import { FulfillmentTaskQueue } from '../../order/services/FulfillmentTaskQueue';
 
 export interface CreatePaymentSelection {
   productId: string;
@@ -51,9 +52,11 @@ export class PaymentService {
   private postageSizeRepo = new PostageSizeRepository();
   private shippingService = new CheckoutShippingService();
   private orderRepo = new OrderRepository();
+  private fulfillmentTaskQueue = new FulfillmentTaskQueue();
 
   async createPaymentIntentForUserByUid(
     firebaseUid: string,
+    orderId: string,
     selection: CreatePaymentSelection,
   ) {
     const user = await this.userRepo.getById(firebaseUid);
@@ -118,7 +121,7 @@ export class PaymentService {
     const securityFee = calculateSecurityFeePence(productAmount);
     const totalAmount = productAmount + shippingFee + securityFee;
 
-    const order = await this.orderRepo.createPendingOrder({
+    const order = await this.orderRepo.createPendingOrder(orderId, {
       userId: firebaseUid,
       sellerId: product.userId,
       charityId: product.charityId,
@@ -141,7 +144,7 @@ export class PaymentService {
 
     const metadata = {
       firebaseUid,
-      orderId: order.id,
+      orderId,
       sellerId: product.userId,
       charityId: product.charityId,
       productId: selection.productId,
@@ -165,10 +168,10 @@ export class PaymentService {
         totalAmount,
         metadata,
       );
-      await this.orderRepo.attachPaymentIntent(order.id, payment.paymentIntentId);
+      await this.orderRepo.attachPaymentIntent(orderId, payment.paymentIntentId);
     } catch (err) {
       try {
-        await this.orderRepo.releasePendingOrder(order.id);
+        await this.orderRepo.releasePendingOrder(orderId);
       } catch (releaseError) {
         const reason =
           releaseError instanceof Error ? releaseError.message : String(releaseError);
@@ -181,7 +184,7 @@ export class PaymentService {
 
     return {
       ...payment,
-      orderId: order.id,
+      orderId,
       productAmount,
       shippingFee,
       securityFee,
@@ -288,7 +291,10 @@ export class PaymentService {
         { payment_intent: paymentIntentId },
         { idempotencyKey: `late-checkout-refund-${paymentIntentId}` },
       );
+      return;
     }
+
+    await this.fulfillmentTaskQueue.enqueue(verifiedPayment.orderId);
   }
 
   async handleCanceledPaymentIntent(
