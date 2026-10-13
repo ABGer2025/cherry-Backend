@@ -5,10 +5,11 @@ const mockUpdateOrder = jest.fn();
 const mockCreateBuyerDispute = jest.fn();
 const mockGetOrdersByUserId = jest.fn();
 const mockGetOrderById = jest.fn();
-const mockCreateShipmentForPaidOrder = jest.fn();
 const mockGetShipmentByOrderId = jest.fn();
 const mockSendSellerLabelEmail = jest.fn();
 const mockSendBuyerShipmentStartedEmail = jest.fn();
+const mockEnqueueFulfillment = jest.fn();
+const mockProcessPaidOrder = jest.fn();
 
 jest.mock('../../auth/repositories/UserRepository', () => ({
   UserRepository: jest.fn().mockImplementation(() => ({
@@ -23,6 +24,7 @@ jest.mock('../repositories/OrderRepository', () => ({
     getOrdersByUserId: mockGetOrdersByUserId,
     getOrderById: mockGetOrderById,
   })),
+  FulfillmentJobBusyError: class FulfillmentJobBusyError extends Error {},
 }));
 
 jest.mock('../../../disputes/DisputeRepository', () => ({
@@ -38,15 +40,21 @@ jest.mock('../../payment/services/PaymentService', () => ({
   })),
 }));
 
-jest.mock('../../shipping/services/ShipmentService', () => ({
-  ShipmentService: jest.fn().mockImplementation(() => ({
-    createShipmentForPaidOrder: mockCreateShipmentForPaidOrder,
-  })),
-}));
-
 jest.mock('../../shipping/repositories/ShipmentRepository', () => ({
   ShipmentRepository: jest.fn().mockImplementation(() => ({
     getShipmentByOrderId: mockGetShipmentByOrderId,
+  })),
+}));
+
+jest.mock('../services/FulfillmentTaskQueue', () => ({
+  FulfillmentTaskQueue: jest.fn().mockImplementation(() => ({
+    enqueue: mockEnqueueFulfillment,
+  })),
+}));
+
+jest.mock('../services/OrderFulfillmentService', () => ({
+  OrderFulfillmentService: jest.fn().mockImplementation(() => ({
+    processPaidOrder: mockProcessPaidOrder,
   })),
 }));
 
@@ -171,6 +179,19 @@ describe('orderController.createOrder', () => {
       ...payload,
       createdAt: new Date(),
     });
+    mockEnqueueFulfillment.mockResolvedValue(undefined);
+    mockProcessPaidOrder.mockResolvedValue({
+      shipment: {
+        id: 'shipment-1',
+        status: 'announced',
+        labelUrl: 'https://labels.example/1.pdf',
+        trackingNumber: 'TRACK123',
+        trackingUrl: 'https://track.example/123',
+        carrier: 'inpost_gb',
+      },
+      sendcloudParcel: { id: 99 },
+      completed: true,
+    });
     mockSendSellerLabelEmail.mockResolvedValue({
       sent: true,
       skipped: false,
@@ -181,21 +202,7 @@ describe('orderController.createOrder', () => {
     });
   });
 
-  it('creates a paid order and shipment', async () => {
-    mockCreateShipmentForPaidOrder.mockResolvedValue({
-      shipment: {
-        id: 'shipment-1',
-        status: 'announced',
-        labelUrl: 'https://labels.example/1.pdf',
-        trackingNumber: 'TRACK123',
-        trackingUrl: 'https://track.example/123',
-        carrier: 'inpost_gb',
-      },
-      sendcloudParcel: {
-        id: 99,
-      },
-    });
-
+  it('enqueues and processes fulfillment after payment finalization', async () => {
     const req: any = {
       user: {
         uid: 'user-1',
@@ -216,76 +223,33 @@ describe('orderController.createOrder', () => {
       'pi_123',
       'user-1',
     );
-    expect(mockUpdateOrder).toHaveBeenCalledWith('order-1', {
-      shipmentId: 'shipment-1',
-      shipmentStatus: 'announced',
-      status: 'shipment_created',
-    });
-    expect(mockGetUserById).toHaveBeenCalledWith('seller-1');
-    expect(mockSendSellerLabelEmail).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: 'order-1',
-        productName: 'Winter Coat',
-      }),
-      expect.objectContaining({
-        id: 'seller-1',
-        email: 'seller@example.com',
-      }),
-      expect.objectContaining({
-        id: 'shipment-1',
-        labelUrl: 'https://labels.example/1.pdf',
-      }),
-    );
-    expect(mockSendBuyerShipmentStartedEmail).toHaveBeenCalledWith({
-      to: 'user@example.com',
-      buyerName: 'Jane',
-      productName: 'Winter Coat',
-      orderId: 'order-1',
-      trackingNumber: 'TRACK123',
-      trackingUrl: 'https://track.example/123',
-    });
-    expect(mockUpdateOrder).toHaveBeenCalledWith(
-      'order-1',
-      expect.objectContaining({
-        sellerSoldEmailSentAt: expect.any(Date),
-        buyerShipmentStartedEmailSentAt: expect.any(Date),
-      }),
-    );
+    expect(mockEnqueueFulfillment).toHaveBeenCalledWith('order-1');
+    expect(mockProcessPaidOrder).toHaveBeenCalledWith('order-1');
     expect(res.status).toHaveBeenCalledWith(200);
   });
 
-  it('does not fail order creation when email sending fails', async () => {
-    mockCreateShipmentForPaidOrder.mockResolvedValue({
-      shipment: {
-        id: 'shipment-1',
-        status: 'announced',
-      },
-      sendcloudParcel: {
-        id: 99,
-      },
-    });
-    mockSendSellerLabelEmail.mockRejectedValue(new Error('Resend failed'));
-    mockSendBuyerShipmentStartedEmail.mockRejectedValue(
-      new Error('Resend failed'),
-    );
-
-    const req: any = {
-      user: {
-        uid: 'user-1',
-      },
-      body: { orderId: 'order-1', paymentIntentId: 'pi_123' },
-    };
-    const res = createResponse();
-
-    await createOrder(req, res);
-
-    expect(res.status).toHaveBeenCalledWith(200);
-  });
-
-  it('returns 202 when shipment creation fails after order creation', async () => {
-    mockCreateShipmentForPaidOrder.mockRejectedValue(
+  it('returns a pending fulfillment response when processing needs retry', async () => {
+    mockProcessPaidOrder.mockRejectedValue(
       new Error('Sendcloud unavailable'),
     );
+    const req: any = {
+      user: {
+        uid: 'user-1',
+      },
+      body: { orderId: 'order-1', paymentIntentId: 'pi_123' },
+    };
+    const res = createResponse();
+
+    await createOrder(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(202);
+    expect(mockEnqueueFulfillment).toHaveBeenCalledWith('order-1');
+  });
+
+  it('does not finalize when fulfillment dispatch cannot be enqueued', async () => {
+    mockEnqueueFulfillment.mockRejectedValue(
+      new Error('Cloud Tasks unavailable'),
+    );
 
     const req: any = {
       user: {
@@ -297,17 +261,8 @@ describe('orderController.createOrder', () => {
 
     await createOrder(req, res);
 
-    expect(mockUpdateOrder).toHaveBeenCalledWith('order-1', {
-      shipmentStatus: 'pending',
-      status: 'shipment_pending',
-    });
-    expect(res.status).toHaveBeenCalledWith(202);
-    expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({
-        success: true,
-        message: 'Order created, shipment pending',
-      }),
-    );
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(mockProcessPaidOrder).not.toHaveBeenCalled();
   });
 
   it('returns 400 when payment verification fails', async () => {

@@ -8,6 +8,7 @@ const mockCreatePendingOrder = jest.fn();
 const mockAttachPaymentIntent = jest.fn();
 const mockReleasePendingOrder = jest.fn();
 const mockFinalizePendingOrder = jest.fn();
+const mockEnqueueFulfillment = jest.fn();
 
 jest.mock('../PaymentRepository', () => ({
   PaymentRepository: jest.fn().mockImplementation(() => ({
@@ -71,6 +72,12 @@ jest.mock('../../../shared/config/sendcloudConfig', () => ({
   },
 }));
 
+jest.mock('../../order/services/FulfillmentTaskQueue', () => ({
+  FulfillmentTaskQueue: jest.fn().mockImplementation(() => ({
+    enqueue: mockEnqueueFulfillment,
+  })),
+}));
+
 import { PaymentService } from '../services/PaymentService';
 import { PendingOrderUnavailableError } from '../../order/repositories/OrderRepository';
 
@@ -109,6 +116,7 @@ describe('PaymentService', () => {
     mockAttachPaymentIntent.mockResolvedValue(undefined);
     mockReleasePendingOrder.mockResolvedValue(undefined);
     mockFinalizePendingOrder.mockResolvedValue(undefined);
+    mockEnqueueFulfillment.mockResolvedValue(undefined);
   });
 
   it('calculates the total from trusted product and shipping data', async () => {
@@ -116,6 +124,7 @@ describe('PaymentService', () => {
 
     const result = await service.createPaymentIntentForUserByUid(
       'user-1',
+      'allocated-order-id',
       {
         productId: 'product-1',
         shippingMethodId: '3747',
@@ -149,11 +158,24 @@ describe('PaymentService', () => {
       3149,
       expect.objectContaining({
         firebaseUid: 'user-1',
+        orderId: 'allocated-order-id',
+        sellerId: 'seller-1',
+        charityId: 'charity-1',
         productId: 'product-1',
         productAmount: '2500',
         shippingFee: '399',
         securityFee: '250',
         totalAmount: '3149',
+      }),
+    );
+    expect(mockCreatePendingOrder).toHaveBeenCalledWith(
+      'allocated-order-id',
+      expect.objectContaining({
+        userId: 'user-1',
+        sellerId: 'seller-1',
+        charityId: 'charity-1',
+        productAmount: 2500,
+        totalAmount: 3149,
       }),
     );
     expect(result).toEqual(
@@ -163,7 +185,7 @@ describe('PaymentService', () => {
         securityFee: 250,
         totalAmount: 3149,
         currency: 'GBP',
-        orderId: 'order-1',
+        orderId: 'allocated-order-id',
       }),
     );
   });
@@ -244,6 +266,7 @@ describe('PaymentService', () => {
       'pi_123',
       'user-1',
     );
+    expect(mockEnqueueFulfillment).toHaveBeenCalledWith('order-1');
   });
 
   it('releases the reserved stock after a canceled PaymentIntent', async () => {
