@@ -7,6 +7,11 @@ import { CheckoutShippingService } from '../../shipping/services/CheckoutShippin
 import { sendcloudConfig } from '../../../shared/config/sendcloudConfig';
 import { gbpToPence } from '../../../shared/utils/money';
 import { calculateSecurityFeePence } from '../../../shared/config/checkoutConfig';
+import {
+  OrderRepository,
+  PendingOrderUnavailableError,
+} from '../../order/repositories/OrderRepository';
+import { Order } from '../../order/model/Order';
 
 export interface CreatePaymentSelection {
   productId: string;
@@ -14,11 +19,16 @@ export interface CreatePaymentSelection {
   pickupPointId: string;
   country: string;
   postalCode: string;
+  shipping: Order['shipping'];
+  pickupPoint: Order['pickupPoint'];
 }
 
 export interface VerifiedCheckoutPayment {
   paymentIntentId: string;
   firebaseUid: string;
+  orderId: string;
+  sellerId: string;
+  charityId: string;
   productId: string;
   shippingMethodId: string;
   shippingMethodName: string;
@@ -40,6 +50,7 @@ export class PaymentService {
   private productRepo = new ProductRepository();
   private postageSizeRepo = new PostageSizeRepository();
   private shippingService = new CheckoutShippingService();
+  private orderRepo = new OrderRepository();
 
   async createPaymentIntentForUserByUid(
     firebaseUid: string,
@@ -57,6 +68,21 @@ export class PaymentService {
 
     if (product.number <= 0) {
       throw new Error('Product is out of stock');
+    }
+    if (!product.userId || !product.charityId || !user.email) {
+      throw new Error('Checkout product or customer details are incomplete');
+    }
+
+    if (
+      selection.pickupPoint.id !== selection.pickupPointId ||
+      selection.pickupPoint.country !== selection.country ||
+      selection.shipping.address.country !== selection.country ||
+      this.normalizePostalCode(selection.pickupPoint.postalCode) !==
+        this.normalizePostalCode(selection.postalCode) ||
+      this.normalizePostalCode(selection.shipping.address.postal_code) !==
+        this.normalizePostalCode(selection.postalCode)
+    ) {
+      throw new Error('Checkout delivery details do not match the selection');
     }
 
     if (!product.postageSize) {
@@ -91,8 +117,33 @@ export class PaymentService {
     const shippingFee = shippingMethod.pricePence;
     const securityFee = calculateSecurityFeePence(productAmount);
     const totalAmount = productAmount + shippingFee + securityFee;
+
+    const order = await this.orderRepo.createPendingOrder({
+      userId: firebaseUid,
+      sellerId: product.userId,
+      charityId: product.charityId,
+      email: user.email,
+      productAmount,
+      shippingFee,
+      securityFee,
+      totalAmount,
+      currency: 'GBP',
+      productId: selection.productId,
+      productName: product.name,
+      deliveryType: 'pickup_point',
+      shippingOptionId: shippingMethod.id,
+      shippingOptionName: shippingMethod.name,
+      shippingCarrier: sendcloudConfig.enforcedCarrier,
+      shippingWeight: postageSize.weight,
+      shipping: selection.shipping,
+      pickupPoint: selection.pickupPoint,
+    });
+
     const metadata = {
       firebaseUid,
+      orderId: order.id,
+      sellerId: product.userId,
+      charityId: product.charityId,
       productId: selection.productId,
       shippingMethodId: shippingMethod.id,
       shippingMethodName: shippingMethod.name,
@@ -107,14 +158,30 @@ export class PaymentService {
       totalAmount: String(totalAmount),
     };
 
-    const payment = await this.paymentRepo.createPaymentIntentForUser(
-      user.email,
-      totalAmount,
-      metadata,
-    );
+    let payment;
+    try {
+      payment = await this.paymentRepo.createPaymentIntentForUser(
+        user.email,
+        totalAmount,
+        metadata,
+      );
+      await this.orderRepo.attachPaymentIntent(order.id, payment.paymentIntentId);
+    } catch (err) {
+      try {
+        await this.orderRepo.releasePendingOrder(order.id);
+      } catch (releaseError) {
+        const reason =
+          releaseError instanceof Error ? releaseError.message : String(releaseError);
+        throw new Error(
+          `Payment setup failed and the pending order could not be released: ${reason}`,
+        );
+      }
+      throw err;
+    }
 
     return {
       ...payment,
+      orderId: order.id,
       productAmount,
       shippingFee,
       securityFee,
@@ -140,6 +207,10 @@ export class PaymentService {
     const metadata = paymentIntent.metadata;
     if (metadata.firebaseUid !== firebaseUid) {
       throw new Error('Payment does not belong to the authenticated user');
+    }
+
+    if (!metadata.orderId || !metadata.sellerId || !metadata.charityId) {
+      throw new Error('Payment order metadata is incomplete');
     }
 
     const productAmount = this.parseMetadataInteger(metadata.productAmount, 'productAmount');
@@ -171,6 +242,9 @@ export class PaymentService {
     return {
       paymentIntentId: paymentIntent.id,
       firebaseUid,
+      orderId: metadata.orderId,
+      sellerId: metadata.sellerId,
+      charityId: metadata.charityId,
       productId: metadata.productId,
       shippingMethodId: metadata.shippingMethodId,
       shippingMethodName: metadata.shippingMethodName,
@@ -187,11 +261,55 @@ export class PaymentService {
     };
   }
 
+  async handleSucceededPaymentIntent(paymentIntentId: string): Promise<void> {
+    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+    const firebaseUid = paymentIntent.metadata.firebaseUid;
+    if (!firebaseUid) {
+      throw new Error('Payment is missing its customer metadata');
+    }
+
+    const verifiedPayment = await this.verifySucceededPaymentIntentForUser(
+      firebaseUid,
+      paymentIntentId,
+    );
+
+    try {
+      await this.orderRepo.finalizePendingOrder(
+        verifiedPayment.orderId,
+        paymentIntentId,
+        firebaseUid,
+      );
+    } catch (error) {
+      if (!(error instanceof PendingOrderUnavailableError)) {
+        throw error;
+      }
+
+      await stripe.refunds.create(
+        { payment_intent: paymentIntentId },
+        { idempotencyKey: `late-checkout-refund-${paymentIntentId}` },
+      );
+    }
+  }
+
+  async handleCanceledPaymentIntent(
+    paymentIntentId: string,
+    orderId: string | undefined,
+  ): Promise<void> {
+    if (!orderId) {
+      throw new Error('Canceled PaymentIntent is missing its order metadata');
+    }
+    await this.orderRepo.releasePendingOrder(orderId, paymentIntentId, true);
+  }
+
   private parseMetadataInteger(value: string | undefined, field: string): number {
     const parsed = Number(value);
     if (!Number.isInteger(parsed) || parsed < 0) {
       throw new Error(`Payment metadata ${field} is invalid`);
     }
     return parsed;
+  }
+
+  private normalizePostalCode(postalCode: string): string {
+    return postalCode.replace(/\s/g, '').toUpperCase();
   }
 }

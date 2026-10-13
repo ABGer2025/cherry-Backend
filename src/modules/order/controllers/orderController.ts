@@ -4,9 +4,6 @@ import { UserRepository } from '../../auth/repositories/UserRepository';
 import { OrderRepository } from '../repositories/OrderRepository';
 import { ShipmentService } from '../../shipping/services/ShipmentService';
 import { PaymentService } from '../../payment/services/PaymentService';
-import { sendcloudConfig } from '../../../shared/config/sendcloudConfig';
-import { ProductRepository } from '../../products/repositories/ProductRepository';
-import { PostageSizeRepository } from '../../postage-sizes/repositories/PostageSizeRepository';
 import { ShipmentRepository } from '../../shipping/repositories/ShipmentRepository';
 import { Shipment } from '../../shipping/models/Shipment';
 import { Order, OrderDisputeReason } from '../model/Order';
@@ -15,8 +12,6 @@ import { EmailService } from '../../notifications/services/EmailService';
 import { NotificationService } from '../../notifications/services/NotificationService';
 import { DisputeRepository } from '../../../disputes/DisputeRepository';
 import { DisputeSubmissionError } from '../../../disputes/Dispute';
-
-const ENFORCED_CARRIER = sendcloudConfig.enforcedCarrier;
 
 const getDeliveryState = (
   order: Order,
@@ -203,7 +198,7 @@ export const createOrder = async (
     }
 
     const email = dbUser.email;
-    const { productId, paymentIntentId, shipping, pickupPoint } = req.body;
+    const { orderId, paymentIntentId } = req.body;
 
     const paymentService = new PaymentService();
     let verifiedPayment;
@@ -222,119 +217,52 @@ export const createOrder = async (
       return;
     }
 
-    if (productId !== verifiedPayment.productId) {
+    if (orderId !== verifiedPayment.orderId) {
       ResponseHandler.badRequest(
         res,
-        'Product does not match payment',
-        'The product differs from the paid checkout',
-      );
-      return;
-    }
-
-    if (pickupPoint.id !== verifiedPayment.pickupPointId) {
-      ResponseHandler.badRequest(
-        res,
-        'Pickup point does not match payment',
-        'The selected pickup point differs from the paid checkout',
-      );
-      return;
-    }
-
-    if (
-      shipping.address.country !== verifiedPayment.destinationCountry ||
-      shipping.address.postal_code.replace(/\s/g, '').toUpperCase() !==
-        verifiedPayment.destinationPostalCode.replace(/\s/g, '').toUpperCase()
-    ) {
-      ResponseHandler.badRequest(
-        res,
-        'Shipping destination does not match payment',
-        'The shipping country or postcode differs from the paid checkout',
-      );
-      return;
-    }
-
-    const productRepo = new ProductRepository();
-    const product = await productRepo.getById(productId);
-
-    if (!product) {
-      ResponseHandler.notFound(
-        res,
-        'Product not found',
-        `Product with ID ${productId} does not exist`,
-      );
-      return;
-    }
-
-    if (!product.postageSize) {
-      ResponseHandler.badRequest(
-        res,
-        'Product postage size is missing',
-        'The product must have a postage size before an order can be created',
-      );
-      return;
-    }
-
-    const postageSizeRepo = new PostageSizeRepository();
-    const postageSize = await postageSizeRepo.getById(product.postageSize);
-
-    if (!postageSize) {
-      ResponseHandler.badRequest(
-        res,
-        'Invalid product postage size',
-        `Postage size ${product.postageSize} does not exist`,
-      );
-      return;
-    }
-
-    if (postageSize.weight !== verifiedPayment.shippingWeight) {
-      ResponseHandler.badRequest(
-        res,
-        'Product postage size changed',
-        'The product postage weight differs from the paid checkout',
-      );
-      return;
-    }
-
-    const normalizedPickupCarrier = String(
-      pickupPoint?.carrier || '',
-    ).toLowerCase();
-    if (
-      verifiedPayment.shippingCarrier !== ENFORCED_CARRIER ||
-      normalizedPickupCarrier !== ENFORCED_CARRIER
-    ) {
-      ResponseHandler.badRequest(
-        res,
-        'Invalid carrier',
-        `Only ${ENFORCED_CARRIER} carrier is supported`,
+        'Order does not match payment',
+        'The order differs from the paid checkout',
       );
       return;
     }
 
     const orderRepo = new OrderRepository();
+    const pendingOrder = await orderRepo.getOrderById(orderId);
+    if (!pendingOrder) {
+      ResponseHandler.notFound(res, 'Pending order not found');
+      return;
+    }
+
+    if (
+      pendingOrder.userId !== firebaseUid ||
+      pendingOrder.paymentIntentId !== paymentIntentId ||
+      pendingOrder.sellerId !== verifiedPayment.sellerId ||
+      pendingOrder.charityId !== verifiedPayment.charityId ||
+      pendingOrder.productId !== verifiedPayment.productId ||
+      pendingOrder.productAmount !== verifiedPayment.productAmount ||
+      pendingOrder.shippingFee !== verifiedPayment.shippingFee ||
+      pendingOrder.securityFee !== verifiedPayment.securityFee ||
+      pendingOrder.totalAmount !== verifiedPayment.totalAmount ||
+      pendingOrder.shippingOptionId !== verifiedPayment.shippingMethodId ||
+      pendingOrder.shippingWeight !== verifiedPayment.shippingWeight ||
+      pendingOrder.shippingCarrier !== verifiedPayment.shippingCarrier ||
+      pendingOrder.pickupPoint.id !== verifiedPayment.pickupPointId
+    ) {
+      ResponseHandler.badRequest(
+        res,
+        'Pending order does not match payment',
+        'The stored order details differ from the verified payment',
+      );
+      return;
+    }
+
     let savedOrder;
     try {
-      savedOrder = await orderRepo.createPaidOrderAndDecrementInventory({
-        userId: firebaseUid,
-        email,
-        productAmount: verifiedPayment.productAmount,
-        shippingFee: verifiedPayment.shippingFee,
-        securityFee: verifiedPayment.securityFee,
-        totalAmount: verifiedPayment.totalAmount,
-        currency: verifiedPayment.currency,
-        productId: verifiedPayment.productId,
-        productName: product.name,
-        deliveryType: 'pickup_point',
-        shippingOptionId: verifiedPayment.shippingMethodId,
-        shippingOptionName: verifiedPayment.shippingMethodName,
-        shippingCarrier: verifiedPayment.shippingCarrier,
-        shippingWeight: verifiedPayment.shippingWeight,
-        shipping,
-        pickupPoint,
+      savedOrder = await orderRepo.finalizePendingOrder(
+        orderId,
         paymentIntentId,
-        paymentStatus: 'succeeded',
-        shipmentStatus: 'pending',
-        status: 'paid',
-      });
+        firebaseUid,
+      );
     } catch (err) {
       if (
         err instanceof Error &&
@@ -346,9 +274,11 @@ export const createOrder = async (
       if (
         err instanceof Error &&
         [
-          'Product price changed',
           'Product is out of stock',
           'Product is not available',
+          'Pending order has expired',
+          'Pending order is no longer payable',
+          'Reserved product is no longer available',
         ].includes(err.message)
       ) {
         ResponseHandler.conflict(
@@ -378,8 +308,8 @@ export const createOrder = async (
       const emailUpdates: Partial<Order> = {};
 
       try {
-        const seller = await userRepo.getById(product.userId);
-        if (seller) {
+        const seller = await userRepo.getById(savedOrder.sellerId);
+        if (seller && !savedOrder.sellerSoldEmailSentAt) {
           const result = await notificationService.sendSellerLabelEmail(
             savedOrder,
             seller,
@@ -390,24 +320,26 @@ export const createOrder = async (
             emailUpdates.sellerSoldEmailSentAt = new Date();
           }
         } else {
-          console.warn(`Seller profile not found for product ${product.id}`);
+          console.warn(`Seller profile not found for order ${savedOrder.id}`);
         }
       } catch (err) {
         console.error('Failed to send seller item sold email:', err);
       }
 
       try {
-        const result = await emailService.sendBuyerShipmentStartedEmail({
-          to: email,
-          buyerName: dbUser.firstname || dbUser.displayName,
-          productName: savedOrder.productName,
-          orderId: savedOrder.id,
-          trackingNumber: shipment.trackingNumber,
-          trackingUrl: shipment.trackingUrl,
-        });
+        if (!savedOrder.buyerShipmentStartedEmailSentAt) {
+          const result = await emailService.sendBuyerShipmentStartedEmail({
+            to: email,
+            buyerName: dbUser.firstname || dbUser.displayName,
+            productName: savedOrder.productName,
+            orderId: savedOrder.id,
+            trackingNumber: shipment.trackingNumber,
+            trackingUrl: shipment.trackingUrl,
+          });
 
-        if (result.sent) {
-          emailUpdates.buyerShipmentStartedEmailSentAt = new Date();
+          if (result.sent) {
+            emailUpdates.buyerShipmentStartedEmailSentAt = new Date();
+          }
         }
       } catch (err) {
         console.error('Failed to send buyer shipment started email:', err);
