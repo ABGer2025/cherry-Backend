@@ -1,15 +1,12 @@
 const mockGetUserById = jest.fn();
 const mockVerifySucceededPaymentIntentForUser = jest.fn();
-const mockGetDeliveryOptions = jest.fn();
-const mockCreatePaidOrderAndDecrementInventory = jest.fn();
+const mockFinalizePendingOrder = jest.fn();
 const mockUpdateOrder = jest.fn();
 const mockCreateBuyerDispute = jest.fn();
 const mockGetOrdersByUserId = jest.fn();
 const mockGetOrderById = jest.fn();
 const mockCreateShipmentForPaidOrder = jest.fn();
 const mockGetShipmentByOrderId = jest.fn();
-const mockGetProductById = jest.fn();
-const mockGetPostageSizeById = jest.fn();
 const mockSendSellerLabelEmail = jest.fn();
 const mockSendBuyerShipmentStartedEmail = jest.fn();
 
@@ -21,8 +18,7 @@ jest.mock('../../auth/repositories/UserRepository', () => ({
 
 jest.mock('../repositories/OrderRepository', () => ({
   OrderRepository: jest.fn().mockImplementation(() => ({
-    createPaidOrderAndDecrementInventory:
-      mockCreatePaidOrderAndDecrementInventory,
+    finalizePendingOrder: mockFinalizePendingOrder,
     updateOrder: mockUpdateOrder,
     getOrdersByUserId: mockGetOrdersByUserId,
     getOrderById: mockGetOrderById,
@@ -39,12 +35,6 @@ jest.mock('../../payment/services/PaymentService', () => ({
   PaymentService: jest.fn().mockImplementation(() => ({
     verifySucceededPaymentIntentForUser:
       mockVerifySucceededPaymentIntentForUser,
-  })),
-}));
-
-jest.mock('../../shipping/services/CheckoutShippingService', () => ({
-  CheckoutShippingService: jest.fn().mockImplementation(() => ({
-    getDeliveryOptions: mockGetDeliveryOptions,
   })),
 }));
 
@@ -69,18 +59,6 @@ jest.mock('../../notifications/services/EmailService', () => ({
 jest.mock('../../notifications/services/NotificationService', () => ({
   NotificationService: jest.fn().mockImplementation(() => ({
     sendSellerLabelEmail: mockSendSellerLabelEmail,
-  })),
-}));
-
-jest.mock('../../products/repositories/ProductRepository', () => ({
-  ProductRepository: jest.fn().mockImplementation(() => ({
-    getById: mockGetProductById,
-  })),
-}));
-
-jest.mock('../../postage-sizes/repositories/PostageSizeRepository', () => ({
-  PostageSizeRepository: jest.fn().mockImplementation(() => ({
-    getById: mockGetPostageSizeById,
   })),
 }));
 
@@ -146,6 +124,9 @@ describe('orderController.createOrder', () => {
     mockVerifySucceededPaymentIntentForUser.mockResolvedValue({
       paymentIntentId: 'pi_123',
       firebaseUid: 'user-1',
+      orderId: 'order-1',
+      sellerId: 'seller-1',
+      charityId: 'charity-1',
       productId: 'product-1',
       shippingMethodId: '12345',
       shippingMethodName: 'InPost locker',
@@ -160,26 +141,36 @@ describe('orderController.createOrder', () => {
       totalAmount: 2599,
       currency: 'GBP',
     });
-    mockGetProductById.mockResolvedValue({
-      id: 'product-1',
-      userId: 'seller-1',
-      name: 'Winter Coat',
-      postageSize: 'postage-size-1',
+    mockGetOrderById.mockResolvedValue({
+      id: 'order-1',
+      userId: 'user-1',
+      sellerId: 'seller-1',
+      charityId: 'charity-1',
+      paymentIntentId: 'pi_123',
+      productId: 'product-1',
+      productAmount: 2000,
+      shippingFee: 399,
+      securityFee: 200,
+      totalAmount: 2599,
+      shippingOptionId: '12345',
+      shippingWeight: 2000,
+      shippingCarrier: 'inpost_gb',
+      pickupPoint: { id: '999' },
+      status: 'pending_payment',
     });
-    mockGetPostageSizeById.mockResolvedValue({
-      id: 'postage-size-1',
-      size: 'large',
-      type: 'inpost',
-      description: 'Large parcel',
-      weight: 2000,
+    mockFinalizePendingOrder.mockResolvedValue({
+      id: 'order-1',
+      userId: 'user-1',
+      sellerId: 'seller-1',
+      charityId: 'charity-1',
+      email: 'user@example.com',
+      productName: 'Winter Coat',
+      paymentStatus: 'succeeded',
+      shipmentStatus: 'pending',
+      status: 'paid',
+      ...payload,
+      createdAt: new Date(),
     });
-    mockGetDeliveryOptions.mockResolvedValue([
-      {
-        id: '12345',
-        name: 'InPost locker',
-        price: '3.99',
-      },
-    ]);
     mockSendSellerLabelEmail.mockResolvedValue({
       sent: true,
       skipped: false,
@@ -191,17 +182,6 @@ describe('orderController.createOrder', () => {
   });
 
   it('creates a paid order and shipment', async () => {
-    mockCreatePaidOrderAndDecrementInventory.mockResolvedValue({
-      id: 'order-1',
-      userId: 'user-1',
-      email: 'user@example.com',
-      ...payload,
-      productName: 'Winter Coat',
-      paymentStatus: 'succeeded',
-      shipmentStatus: 'pending',
-      status: 'paid',
-      createdAt: new Date(),
-    });
     mockCreateShipmentForPaidOrder.mockResolvedValue({
       shipment: {
         id: 'shipment-1',
@@ -220,7 +200,7 @@ describe('orderController.createOrder', () => {
       user: {
         uid: 'user-1',
       },
-      body: payload,
+      body: { orderId: 'order-1', paymentIntentId: 'pi_123' },
     };
     const res = createResponse();
 
@@ -230,17 +210,11 @@ describe('orderController.createOrder', () => {
       'user-1',
       'pi_123',
     );
-    expect(mockCreatePaidOrderAndDecrementInventory).toHaveBeenCalledWith(
-      expect.objectContaining({
-        productName: 'Winter Coat',
-        shippingWeight: 2000,
-        productAmount: 2000,
-        shippingFee: 399,
-        securityFee: 200,
-        totalAmount: 2599,
-        shippingOptionId: '12345',
-        shippingOptionName: 'InPost locker',
-      }),
+    expect(mockGetOrderById).toHaveBeenCalledWith('order-1');
+    expect(mockFinalizePendingOrder).toHaveBeenCalledWith(
+      'order-1',
+      'pi_123',
+      'user-1',
     );
     expect(mockUpdateOrder).toHaveBeenCalledWith('order-1', {
       shipmentId: 'shipment-1',
@@ -281,17 +255,6 @@ describe('orderController.createOrder', () => {
   });
 
   it('does not fail order creation when email sending fails', async () => {
-    mockCreatePaidOrderAndDecrementInventory.mockResolvedValue({
-      id: 'order-1',
-      userId: 'user-1',
-      email: 'user@example.com',
-      ...payload,
-      productName: 'Winter Coat',
-      paymentStatus: 'succeeded',
-      shipmentStatus: 'pending',
-      status: 'paid',
-      createdAt: new Date(),
-    });
     mockCreateShipmentForPaidOrder.mockResolvedValue({
       shipment: {
         id: 'shipment-1',
@@ -310,7 +273,7 @@ describe('orderController.createOrder', () => {
       user: {
         uid: 'user-1',
       },
-      body: payload,
+      body: { orderId: 'order-1', paymentIntentId: 'pi_123' },
     };
     const res = createResponse();
 
@@ -320,16 +283,6 @@ describe('orderController.createOrder', () => {
   });
 
   it('returns 202 when shipment creation fails after order creation', async () => {
-    mockCreatePaidOrderAndDecrementInventory.mockResolvedValue({
-      id: 'order-2',
-      userId: 'user-1',
-      email: 'user@example.com',
-      ...payload,
-      paymentStatus: 'succeeded',
-      shipmentStatus: 'pending',
-      status: 'paid',
-      createdAt: new Date(),
-    });
     mockCreateShipmentForPaidOrder.mockRejectedValue(
       new Error('Sendcloud unavailable'),
     );
@@ -338,13 +291,13 @@ describe('orderController.createOrder', () => {
       user: {
         uid: 'user-1',
       },
-      body: payload,
+      body: { orderId: 'order-1', paymentIntentId: 'pi_123' },
     };
     const res = createResponse();
 
     await createOrder(req, res);
 
-    expect(mockUpdateOrder).toHaveBeenCalledWith('order-2', {
+    expect(mockUpdateOrder).toHaveBeenCalledWith('order-1', {
       shipmentStatus: 'pending',
       status: 'shipment_pending',
     });
@@ -366,20 +319,23 @@ describe('orderController.createOrder', () => {
       user: {
         uid: 'user-1',
       },
-      body: payload,
+      body: { orderId: 'order-1', paymentIntentId: 'pi_123' },
     };
     const res = createResponse();
 
     await createOrder(req, res);
 
-    expect(mockCreatePaidOrderAndDecrementInventory).not.toHaveBeenCalled();
+    expect(mockFinalizePendingOrder).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(400);
   });
 
-  it('returns 400 when pickup point differs from the paid checkout', async () => {
+  it('returns 400 when the pending order differs from the paid checkout', async () => {
     mockVerifySucceededPaymentIntentForUser.mockResolvedValue({
       paymentIntentId: 'pi_123',
       firebaseUid: 'user-1',
+      orderId: 'order-1',
+      sellerId: 'seller-1',
+      charityId: 'charity-1',
       productId: 'product-1',
       shippingMethodId: '12345',
       shippingMethodName: 'InPost locker',
@@ -399,31 +355,31 @@ describe('orderController.createOrder', () => {
       user: {
         uid: 'user-1',
       },
-      body: payload,
+      body: { orderId: 'order-1', paymentIntentId: 'pi_123' },
     };
     const res = createResponse();
 
     await createOrder(req, res);
 
-    expect(mockCreatePaidOrderAndDecrementInventory).not.toHaveBeenCalled();
+    expect(mockFinalizePendingOrder).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(400);
   });
 
-  it('returns 400 when the product postage size does not exist', async () => {
-    mockGetPostageSizeById.mockResolvedValue(null);
+  it('returns 404 when the pending order no longer exists', async () => {
+    mockGetOrderById.mockResolvedValue(null);
 
     const req: any = {
       user: {
         uid: 'user-1',
       },
-      body: payload,
+      body: { orderId: 'order-1', paymentIntentId: 'pi_123' },
     };
     const res = createResponse();
 
     await createOrder(req, res);
 
-    expect(mockCreatePaidOrderAndDecrementInventory).not.toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(400);
+    expect(mockFinalizePendingOrder).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(404);
   });
 });
 
