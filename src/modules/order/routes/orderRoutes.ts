@@ -297,7 +297,12 @@ router.post('/:id/dispute', authMiddleware, submitOrderDispute);
  * @swagger
  * /api/order/create:
  *   post:
- *     summary: Create a paid order and create its shipment
+ *     summary: Confirm payment and finalize the existing pending order
+ *     description: >
+ *       Confirms a pending order created by the payment endpoint. The authenticated buyer,
+ *       order ID, and PaymentIntent metadata must match; the server verifies that payment
+ *       succeeded before finalizing the same order. Shipment fulfillment is queued for
+ *       retryable processing and may still be pending when this request returns.
  *     tags: [Order]
  *     security:
  *       - bearerAuth: []
@@ -308,98 +313,22 @@ router.post('/:id/dispute', authMiddleware, submitOrderDispute);
  *           schema:
  *             type: object
  *             required:
- *               - productId
+ *               - orderId
  *               - paymentIntentId
- *               - shipping
- *               - pickupPoint
  *             properties:
- *               productId:
+ *               orderId:
  *                 type: string
- *                 example: "product-001"
+ *                 description: ID returned by the payment-intent endpoint for the pending order
+ *                 example: "order-001"
  *               paymentIntentId:
  *                 type: string
- *                 description: Paid Stripe PaymentIntent containing trusted checkout metadata
+ *                 description: PaymentIntent used for this pending order; payment must have succeeded
  *                 example: "pi_REPLACE_WITH_REAL_ID_ONLY"
- *               shipping:
- *                 type: object
- *                 required:
- *                   - address
- *                   - name
- *                   - telephone
- *                 properties:
- *                   address:
- *                     type: object
- *                     required:
- *                       - line1
- *                       - city
- *                       - postal_code
- *                       - country
- *                     properties:
- *                       line1:
- *                         type: string
- *                         example: "18 Calderwood Street"
- *                       line2:
- *                         type: string
- *                         example: "Flat 7"
- *                       house_number:
- *                         type: string
- *                         example: "18"
- *                       city:
- *                         type: string
- *                         example: "London"
- *                       state:
- *                         type: string
- *                         example: "Greater London"
- *                       postal_code:
- *                         type: string
- *                         example: "SE18 6QW"
- *                       country:
- *                         type: string
- *                         example: "GB"
- *                   name:
- *                     type: string
- *                     example: "John Doe"
- *                   telephone:
- *                     type: string
- *                     example: "+447700900000"
- *               pickupPoint:
- *                 type: object
- *                 description: Required. Must be an InPost pickup point.
- *                 required:
- *                   - id
- *                   - name
- *                   - addressLine1
- *                   - city
- *                   - postalCode
- *                   - country
- *                   - carrier
- *                 properties:
- *                   id:
- *                     type: string
- *                     example: "13127548"
- *                   name:
- *                     type: string
- *                     example: "InPost Locker"
- *                   addressLine1:
- *                     type: string
- *                     example: "123 High Street"
- *                   city:
- *                     type: string
- *                     example: "London"
- *                   postalCode:
- *                     type: string
- *                     example: "SE7 8UG"
- *                   country:
- *                     type: string
- *                     example: "GB"
- *                   carrier:
- *                     type: string
- *                     enum: [inpost_gb]
  *     responses:
  *       200:
- *         description: Order and shipment created successfully
+ *         description: Payment verified and pending order finalized; fulfillment processing started
  *       202:
- *         description: Order created but shipment creation is pending
+ *         description: Order finalized; shipment fulfillment is queued or pending
  *       400:
  *         description: Bad request
  *       401:

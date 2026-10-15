@@ -2,15 +2,19 @@ import { Request, Response } from 'express';
 import { ResponseHandler } from '../../../shared/utils/responseHandler';
 import { createWebhook } from '../../../shared/config/stripeConfig';
 import { PaymentService } from '../services/PaymentService';
+import { OrderRepository } from '../../order/repositories/OrderRepository';
+import Stripe from 'stripe';
 
 export const createPaymentIntent = async (req: Request, res: Response): Promise<void> => {
   try {
     const user = (req as any).user;
     const firebaseUid = user.uid;
 
+    const orderId = new OrderRepository().createOrderId();
     const paymentService = new PaymentService();
     const responseData = await paymentService.createPaymentIntentForUserByUid(
       firebaseUid,
+      orderId,
       req.body,
     );
 
@@ -24,27 +28,42 @@ export const createPaymentIntent = async (req: Request, res: Response): Promise<
   }
 };
  
-// Stripe webhook endpoint (moved from webhookController)
 export const stripeWebhook = async (req: Request, res: Response): Promise<void> => {
+  const sig = req.headers['stripe-signature'] as string;
+  if (!sig) {
+    ResponseHandler.badRequest(res, 'Missing Stripe signature header');
+    return;
+  }
+
+  let event: Stripe.Event;
   try {
-    const sig = req.headers['stripe-signature'] as string;
-    if (!sig) {
-      ResponseHandler.badRequest(res, 'Missing Stripe signature header');
-      return;
-    }
-
-    // Raw body is required for signature verification
     const rawBody = (req as any).rawBody || req.body;
-    const event = createWebhook(rawBody, sig);
+    event = createWebhook(rawBody, sig);
+  } catch (err) {
+    ResponseHandler.badRequest(
+      res,
+      'Invalid Stripe webhook signature',
+      err instanceof Error ? err.message : 'Unknown error',
+    );
+    return;
+  }
 
-    // Example handling – extend as needed
+  try {
+    const paymentService = new PaymentService();
     if (event.type === 'payment_intent.succeeded') {
-      console.log('✅ Payment succeeded:', (event.data.object as any).id);
+      const paymentIntent = event.data.object as Stripe.PaymentIntent;
+      await paymentService.handleSucceededPaymentIntent(paymentIntent.id);
+    } else if (event.type === 'payment_intent.canceled') {
+      const paymentIntent = event.data.object as Stripe.PaymentIntent;
+      await paymentService.handleCanceledPaymentIntent(
+        paymentIntent.id,
+        paymentIntent.metadata.orderId,
+      );
     }
 
     ResponseHandler.success(res, {}, 'Webhook received');
   } catch (err) {
-    console.error('⚠️ Webhook error:', err);
+    console.error('Stripe webhook processing failed:', err);
     ResponseHandler.internalServerError(
       res,
       'Failed to process webhook',

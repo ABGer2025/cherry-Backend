@@ -18,6 +18,8 @@ describe('ShipmentService.createShipmentForPaidOrder', () => {
   const order: Order = {
     id: 'order-1',
     userId: 'buyer-1',
+    sellerId: 'seller-1',
+    charityId: 'charity-1',
     email: 'buyer@example.com',
     productAmount: 2000,
     shippingFee: 399,

@@ -40,6 +40,8 @@ export interface PickupPointSelection {
 export interface Order {
   id: string;
   userId: string;
+  sellerId: string;
+  charityId: string;
   email: string;
   productAmount: number;
   shippingFee: number;
@@ -59,9 +61,11 @@ export interface Order {
     telephone: string;
   };
   pickupPoint: PickupPointSelection;
-  paymentIntentId: string;
-  paymentStatus: 'succeeded';
+  paymentIntentId?: string;
+  paymentStatus: 'pending' | 'succeeded' | 'failed' | 'cancelled';
   status:
+    | 'pending_payment'
+    | 'expired'
     | 'paid'
     | 'shipment_pending'
     | 'shipment_created'
@@ -71,6 +75,10 @@ export interface Order {
     | 'failed';
   shipmentStatus: ShipmentStatus;
   shipmentId?: string;
+  paymentExpiresAt?: Date;
+  reservationActive?: boolean;
+  paidAt?: Date;
+  updatedAt?: Date;
   buyerConfirmedReceived?: boolean;
   buyerConfirmedReceivedAt?: Date;
   sellerSoldEmailSentAt?: Date;
