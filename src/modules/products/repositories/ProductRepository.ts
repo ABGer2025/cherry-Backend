@@ -1,9 +1,6 @@
 import {
   assertOwner,
-  assertSafetyVerified,
-  requireVersion,
   ListingSafetyError,
-  listingEditingEnabled,
 } from '../../../shared/utils/listingSafety';
 import { parseListingEdit } from '../validators/productValidator';
 import type { UpdateProductData } from '../services/ProductService';
@@ -54,8 +51,6 @@ export class ProductRepository {
     const ref = this.db.collection(this.collectionName).doc();
     const stored = {
       ...product,
-      editVersion: 0,
-      editSafetyVerified: true,
       hasSales: false,
       hasBeenEdited: false,
     };
@@ -88,13 +83,7 @@ export class ProductRepository {
     input: UpdateProductData,
     uid: string,
   ): Promise<Product> {
-    if (!listingEditingEnabled())
-      throw new ListingSafetyError(
-        503,
-        'LISTING_EDIT_DISABLED',
-        'Listing editing is not available yet.',
-      );
-    const { expectedEditVersion, ...changes } = parseListingEdit(input);
+    const changes = parseListingEdit(input);
     const ref = this.db.collection(this.collectionName).doc(id);
     return this.db.runTransaction(async (tx) => {
       const doc = await tx.get(ref);
@@ -106,15 +95,6 @@ export class ProductRepository {
         );
       const data = doc.data()!;
       assertOwner(data, uid);
-      assertSafetyVerified(data);
-      const version =
-        data.editVersion === undefined ? 0 : requireVersion(data);
-      if (version !== expectedEditVersion)
-        throw new ListingSafetyError(
-          409,
-          'LISTING_VERSION_CONFLICT',
-          'This listing has changed. Reload it before saving.',
-        );
       if (
         !['active', 'unlisted'].includes(data.status) ||
         !Number.isSafeInteger(data.number) ||
@@ -158,7 +138,6 @@ export class ProductRepository {
       const updates = {
         ...changes,
         hasBeenEdited: true,
-        editVersion: version + 1,
         updatedAt: new Date(),
       };
       tx.update(ref, updates);
@@ -182,8 +161,6 @@ export class ProductRepository {
         );
       const data = doc.data()!;
       assertOwner(data, uid);
-      const version =
-        data.editVersion === undefined ? 0 : requireVersion(data);
       const orders = await tx.get(
         this.db.collection('orders').where('productId', '==', id),
       );
@@ -218,7 +195,6 @@ export class ProductRepository {
       if (data.status === status) return this.mapToProduct(id, data);
       const updates = {
         status,
-        editVersion: version + 1,
         updatedAt: new Date(),
       };
       tx.update(ref, updates);

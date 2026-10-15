@@ -39,31 +39,25 @@ app.put(
 app.get('/api/products/:id', authMiddleware, getProductById);
 beforeEach(() => {
   jest.clearAllMocks();
-  process.env.LISTING_EDIT_ENABLED = 'true';
 });
-afterAll(() => {
-  delete process.env.LISTING_EDIT_ENABLED;
-});
-test('returns committed version and preserves sparse request semantics', async () => {
+test('updates an allowed field and preserves sparse request semantics', async () => {
   mockUpdate.mockResolvedValue({
     id: 'listing',
-    editVersion: 5,
     price: 10,
     hasSales: false,
   });
   const result = await request(app)
     .put('/api/products/listing')
     .set('Authorization', 'Bearer seller')
-    .send({ name: ' New title ', expectedEditVersion: 4 });
+    .send({ name: ' New title ' });
   expect(result.status).toBe(200);
   expect(result.body.data).toEqual({
     id: 'listing',
-    editVersion: 5,
     price: 10,
   });
   expect(mockUpdate).toHaveBeenCalledWith(
     'listing',
-    { name: 'New title', expectedEditVersion: 4 },
+    { name: 'New title' },
     'seller',
   );
 });
@@ -72,22 +66,20 @@ test('unauthenticated and forbidden requests never reach the service', async () 
     (
       await request(app)
         .put('/api/products/listing')
-        .send({ name: 'Title', expectedEditVersion: 0 })
+        .send({ name: 'Title' })
     ).status,
   ).toBe(401);
   const result = await request(app)
     .put('/api/products/listing')
     .set('Authorization', 'Bearer seller')
-    .send({ name: 'Title', expectedEditVersion: 0, charityId: 'forbidden' });
+    .send({ name: 'Title', charityId: 'forbidden' });
   expect(result.status).toBe(400);
   expect(result.body.code).toBe('LISTING_VALIDATION_FAILED');
   expect(mockUpdate).not.toHaveBeenCalled();
 });
 test.each([
   [403, 'LISTING_NOT_OWNER'],
-  [409, 'LISTING_VERSION_CONFLICT'],
   [409, 'LISTING_HAS_SALES'],
-  [503, 'LISTING_EDIT_DISABLED'],
 ])('returns machine-readable %s/%s', async (status, code) => {
   mockUpdate.mockRejectedValue(
     new ListingSafetyError(status as number, code as string, 'Blocked'),
@@ -95,17 +87,16 @@ test.each([
   const result = await request(app)
     .put('/api/products/listing')
     .set('Authorization', 'Bearer seller')
-    .send({ name: 'Title', expectedEditVersion: 0 });
+    .send({ name: 'Title' });
   expect(result.status).toBe(status);
   expect(result.body.code).toBe(code);
 });
-test('canonical reads expose the committed version and omit internal state', async () => {
+test('canonical reads omit internal listing state', async () => {
   mockGet.mockResolvedValue({
     id: 'listing',
-    editVersion: 5,
     status: 'active',
     price: 10,
-    editSafetyVerified: true,
+    hasSales: false,
     hasBeenEdited: true,
   });
   const result = await request(app)
@@ -113,8 +104,8 @@ test('canonical reads expose the committed version and omit internal state', asy
     .set('Authorization', 'Bearer seller');
   expect(result.body.data).toMatchObject({
     id: 'listing',
-    editVersion: 5,
     status: 'active',
   });
-  expect(result.body.data).not.toHaveProperty('editSafetyVerified');
+  expect(result.body.data).not.toHaveProperty('hasSales');
+  expect(result.body.data).not.toHaveProperty('hasBeenEdited');
 });

@@ -99,10 +99,6 @@ const router = Router();
  *           type: number
  *           description: Product quantity/number
  *           example: 10
- *         editVersion:
- *           type: integer
- *           minimum: 0
- *           description: Committed listing version, exposed only after the safety release gate is enabled and this record has a valid version.
  *         status:
  *           type: string
  *           enum: [active, unlisted, sold]
@@ -525,7 +521,7 @@ router.post('/', authMiddleware, validateProduct, createProduct);
  * /api/products/{id}:
  *   put:
  *     summary: Edit descriptive fields of an owned, unsold listing
- *     description: Requires the release gate, certified legacy data, no actionable payment and a matching version. Omitted fields are preserved. Unknown and forbidden fields are rejected. Photos require immutable approved Storage objects with verified ownership. Price, charity, quantity and lifecycle are not editable here.
+ *     description: Requires ownership, available stock and no active or completed payment. Omitted fields are preserved. Unknown and forbidden fields are rejected. Price, charity, quantity and lifecycle are not editable here.
  *     tags: [Products]
  *     parameters:
  *       - in: path
@@ -540,7 +536,7 @@ router.post('/', authMiddleware, validateProduct, createProduct);
  *             $ref: '#/components/schemas/ListingEdit'
  *     responses:
  *       200:
- *         description: Committed edit and incremented version. Fetch the canonical listing before showing success.
+ *         description: Listing updated successfully.
  *         content:
  *           application/json:
  *             schema:
@@ -552,7 +548,7 @@ router.post('/', authMiddleware, validateProduct, createProduct);
  *                   allOf:
  *                     - $ref: '#/components/schemas/Product'
  *                     - type: object
- *                       required: [id, editVersion]
+ *                       required: [id]
  *       400:
  *         $ref: '#/components/responses/ListingValidationError'
  *       401:
@@ -563,8 +559,6 @@ router.post('/', authMiddleware, validateProduct, createProduct);
  *         $ref: '#/components/responses/ListingNotFoundError'
  *       409:
  *         $ref: '#/components/responses/ListingConflictError'
- *       503:
- *         $ref: '#/components/responses/ListingDisabledError'
  */
 router.put(
   '/:id',

@@ -7,14 +7,8 @@ export const listingSafetySchemas = {
   ListingEdit: {
     type: 'object',
     additionalProperties: false,
-    minProperties: 2,
-    required: ['expectedEditVersion'],
+    minProperties: 1,
     properties: {
-      expectedEditVersion: {
-        type: 'integer',
-        minimum: 0,
-        maximum: Number.MAX_SAFE_INTEGER - 1,
-      },
       name: {
         type: 'string',
         minLength: 3,
@@ -70,9 +64,6 @@ export const listingSafetyResponses = {
   ),
   ListingNotFoundError: response('LISTING_NOT_FOUND.'),
   ListingConflictError: response(
-    'LISTING_VERSION_CONFLICT, LISTING_VERSION_REQUIRED, LISTING_VERSION_UNAVAILABLE, LISTING_SAFETY_REVIEW_REQUIRED, LISTING_PAYMENT_PENDING, LISTING_HAS_SALES, LISTING_NOT_EDITABLE, LISTING_NOT_AVAILABLE, CHECKOUT_EXPIRED, CHECKOUT_FINISHED, PAYMENT_STILL_ACTIONABLE, PAYMENT_RECONCILIATION_REQUIRED or ACCOUNT_DELETION_PENDING. Refresh or seek support as appropriate; never retry an edit silently.',
-  ),
-  ListingDisabledError: response(
-    'LISTING_EDIT_DISABLED. Deployment prerequisites are incomplete.',
+    'LISTING_PAYMENT_PENDING, LISTING_HAS_SALES, LISTING_NOT_EDITABLE, LISTING_NOT_AVAILABLE, CHECKOUT_EXPIRED, CHECKOUT_FINISHED, PAYMENT_STILL_ACTIONABLE, PAYMENT_RECONCILIATION_REQUIRED or ACCOUNT_DELETION_PENDING. Refresh or seek support as appropriate.',
   ),
 };
