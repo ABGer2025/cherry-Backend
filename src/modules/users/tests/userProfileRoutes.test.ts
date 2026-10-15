@@ -35,6 +35,12 @@ jest.mock('../../postage-sizes/routes/postageSizeRoutes', () =>
 jest.mock('../../notifications/routes/notificationRoutes', () =>
   require('express').Router(),
 );
+const isBlocked = jest.fn();
+jest.mock('../../blocks/repositories/UserBlockRepository', () => ({
+  UserBlockRepository: jest.fn().mockImplementation(() => ({
+    isBlocked,
+  })),
+}));
 jest.mock('../../payment/controllers/paymentController', () => ({
   stripeWebhook: jest.fn(),
 }));
@@ -85,6 +91,7 @@ beforeEach(() => {
   getProducts
     .mockReset()
     .mockResolvedValue({ products: [product], nextPosition: null });
+  isBlocked.mockReset().mockResolvedValue(false);
   errorLog.mockClear();
 });
 
@@ -112,6 +119,7 @@ describe('Mounted user profile routes', () => {
     const response = await authenticated(productsPath);
     expect(response.status).toBe(200);
     expect(response.headers['cache-control']).toBe('private, no-store');
+    expect(isBlocked).toHaveBeenCalledWith('viewer-uid', 'seller-uid');
     expect(getUser).toHaveBeenCalledWith('seller-uid');
     expect(getProducts).toHaveBeenCalledWith('seller-uid', 20, undefined);
     expect(response.body).toEqual({
@@ -120,6 +128,21 @@ describe('Mounted user profile routes', () => {
       meta: { limit: 20, nextCursor: null, hasMore: false },
     });
     expect(response.body.data).not.toHaveProperty('user');
+  });
+
+  it('returns an empty products page when the viewer blocked the seller', async () => {
+    isBlocked.mockResolvedValue(true);
+
+    const response = await authenticated(productsPath);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      success: true,
+      data: { products: [] },
+      meta: { limit: 20, nextCursor: null, hasMore: false },
+    });
+    expect(getUser).not.toHaveBeenCalled();
+    expect(getProducts).not.toHaveBeenCalled();
   });
 
   it.each([profilePath, productsPath])(
@@ -313,14 +336,23 @@ describe('Mounted user profile routes', () => {
     expect(getProducts).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps missing cursor configuration as a retryable products error', async () => {
+  it('loads the first products page without cursor configuration', async () => {
     delete process.env.USER_PRODUCTS_CURSOR_KEY;
+    const response = await authenticated(productsPath);
+    expect(response.status).toBe(200);
+    expect(response.body.data.products).toHaveLength(1);
+  });
+
+  it('keeps missing cursor configuration as a retryable products error when a next cursor is needed', async () => {
+    delete process.env.USER_PRODUCTS_CURSOR_KEY;
+    getProducts.mockResolvedValueOnce({
+      products: [product],
+      nextPosition: { seconds: 100, nanoseconds: 123456789, id: 'listing-id' },
+    });
     const response = await authenticated(productsPath);
     expect(response.status).toBe(503);
     expect(response.body).not.toHaveProperty('data');
-    expect(getUser).not.toHaveBeenCalled();
   });
-
 });
 
 describe('User profile Swagger', () => {
