@@ -4,7 +4,6 @@ import { createWebhook } from '../../../shared/config/stripeConfig';
 import { PaymentService } from '../services/PaymentService';
 import { OrderRepository } from '../../order/repositories/OrderRepository';
 import Stripe from 'stripe';
-import { StripeWebhookService } from '../services/StripeWebhookService';
 
 export const createPaymentIntent = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -54,6 +53,9 @@ export const stripeWebhook = async (req: Request, res: Response): Promise<void> 
     if (event.type === 'payment_intent.succeeded') {
       const paymentIntent = event.data.object as Stripe.PaymentIntent;
       await paymentService.handleSucceededPaymentIntent(paymentIntent.id);
+      const { StripeWebhookService } = await import(
+        '../services/StripeWebhookService'
+      );
       await new StripeWebhookService().handleEvent(event);
     } else if (event.type === 'payment_intent.canceled') {
       const paymentIntent = event.data.object as Stripe.PaymentIntent;

@@ -17,6 +17,10 @@ jest.mock('../services/PaymentService', () => ({
   })),
 }));
 
+jest.mock('../../order/repositories/OrderRepository', () => ({
+  OrderRepository: jest.fn(),
+}));
+
 import express from 'express';
 import request from 'supertest';
 import { stripe } from '../../../shared/config/stripeConfig';
