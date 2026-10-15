@@ -525,7 +525,7 @@ router.post('/', authMiddleware, validateProduct, createProduct);
  * /api/products/{id}:
  *   put:
  *     summary: Edit descriptive fields of an owned, unsold listing
- *     description: Requires the release gate, certified legacy data, no actionable payment and a matching version. Omitted fields are preserved. Unknown and forbidden fields are rejected. Photos require immutable approved Storage objects with verified ownership. Price, charity, quantity and lifecycle are not editable here.
+ *     description: Requires the release gate, certified legacy data, no actionable payment and a matching version. Omitted fields are preserved. Unknown and forbidden fields are rejected. Price, charity, quantity and lifecycle are not editable here.
  *     tags: [Products]
  *     parameters:
  *       - in: path
