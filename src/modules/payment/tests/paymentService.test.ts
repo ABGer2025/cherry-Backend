@@ -4,6 +4,12 @@ const mockGetProductById = jest.fn();
 const mockGetPostageSizeById = jest.fn();
 const mockGetDeliveryOptions = jest.fn();
 const mockRetrievePaymentIntent = jest.fn();
+const mockCreatePendingOrder = jest.fn();
+const mockAttachPaymentIntent = jest.fn();
+const mockReleasePendingOrder = jest.fn();
+const mockFinalizePendingOrder = jest.fn();
+const mockMarkPaymentRefunded = jest.fn();
+const mockProcessPaidOrder = jest.fn();
 
 jest.mock('../PaymentRepository', () => ({
   PaymentRepository: jest.fn().mockImplementation(() => ({
@@ -45,7 +51,27 @@ jest.mock('../../../shared/config/stripeConfig', () => ({
     paymentIntents: {
       retrieve: mockRetrievePaymentIntent,
     },
+    refunds: {
+      create: jest.fn(),
+    },
   },
+}));
+
+jest.mock('../../order/repositories/OrderRepository', () => ({
+  OrderRepository: jest.fn().mockImplementation(() => ({
+    createPendingOrder: mockCreatePendingOrder,
+    attachPaymentIntent: mockAttachPaymentIntent,
+    releasePendingOrder: mockReleasePendingOrder,
+    finalizePendingOrder: mockFinalizePendingOrder,
+    markPaymentRefunded: mockMarkPaymentRefunded,
+  })),
+  PendingOrderUnavailableError: class PendingOrderUnavailableError extends Error {
+    constructor(public readonly reason: string) {
+      super(reason);
+    }
+  },
+  PaymentOrderMismatchError: class PaymentOrderMismatchError extends Error {},
+  FulfillmentJobBusyError: class FulfillmentJobBusyError extends Error {},
 }));
 
 jest.mock('../../../shared/config/sendcloudConfig', () => ({
@@ -54,7 +80,14 @@ jest.mock('../../../shared/config/sendcloudConfig', () => ({
   },
 }));
 
+jest.mock('../../order/services/OrderFulfillmentService', () => ({
+  OrderFulfillmentService: jest.fn().mockImplementation(() => ({
+    processPaidOrder: mockProcessPaidOrder,
+  })),
+}));
+
 import { PaymentService } from '../services/PaymentService';
+import { PendingOrderUnavailableError } from '../../order/repositories/OrderRepository';
 
 describe('PaymentService', () => {
   beforeEach(() => {
@@ -68,6 +101,8 @@ describe('PaymentService', () => {
       price: 25,
       number: 1,
       postageSize: 'postage-size-1',
+      userId: 'seller-1',
+      charityId: 'charity-1',
     });
     mockGetPostageSizeById.mockResolvedValue({
       id: 'postage-size-1',
@@ -85,6 +120,12 @@ describe('PaymentService', () => {
       paymentIntentId: 'pi_123',
       clientSecret: 'secret',
     });
+    mockCreatePendingOrder.mockResolvedValue({ id: 'order-1' });
+    mockAttachPaymentIntent.mockResolvedValue(undefined);
+    mockReleasePendingOrder.mockResolvedValue(undefined);
+    mockFinalizePendingOrder.mockResolvedValue(undefined);
+    mockMarkPaymentRefunded.mockResolvedValue(undefined);
+    mockProcessPaidOrder.mockResolvedValue({ completed: true });
   });
 
   it('calculates the total from trusted product and shipping data', async () => {
@@ -92,12 +133,32 @@ describe('PaymentService', () => {
 
     const result = await service.createPaymentIntentForUserByUid(
       'user-1',
+      'allocated-order-id',
       {
         productId: 'product-1',
         shippingMethodId: '3747',
         pickupPointId: '13127548',
         country: 'GB',
         postalCode: 'SE18 4QH',
+        shipping: {
+          address: {
+            line1: '1 Example Street',
+            city: 'London',
+            postal_code: 'SE18 4QH',
+            country: 'GB',
+          },
+          name: 'Customer',
+          telephone: '07123456789',
+        },
+        pickupPoint: {
+          id: '13127548',
+          name: 'Locker',
+          addressLine1: '2 Example Street',
+          city: 'London',
+          postalCode: 'SE18 4QH',
+          country: 'GB',
+          carrier: 'inpost_gb',
+        },
       },
     );
 
@@ -106,11 +167,24 @@ describe('PaymentService', () => {
       3149,
       expect.objectContaining({
         firebaseUid: 'user-1',
+        orderId: 'allocated-order-id',
+        sellerId: 'seller-1',
+        charityId: 'charity-1',
         productId: 'product-1',
         productAmount: '2500',
         shippingFee: '399',
         securityFee: '250',
         totalAmount: '3149',
+      }),
+    );
+    expect(mockCreatePendingOrder).toHaveBeenCalledWith(
+      'allocated-order-id',
+      expect.objectContaining({
+        userId: 'user-1',
+        sellerId: 'seller-1',
+        charityId: 'charity-1',
+        productAmount: 2500,
+        totalAmount: 3149,
       }),
     );
     expect(result).toEqual(
@@ -120,6 +194,7 @@ describe('PaymentService', () => {
         securityFee: 250,
         totalAmount: 3149,
         currency: 'GBP',
+        orderId: 'allocated-order-id',
       }),
     );
   });
@@ -132,6 +207,9 @@ describe('PaymentService', () => {
       amount: 3149,
       metadata: {
         firebaseUid: 'user-1',
+        orderId: 'order-1',
+        sellerId: 'seller-1',
+        charityId: 'charity-1',
         productId: 'product-1',
         shippingMethodId: '3747',
         shippingMethodName: 'InPost locker',
@@ -161,5 +239,102 @@ describe('PaymentService', () => {
         totalAmount: 3149,
       }),
     );
+  });
+
+  it('finalizes an order from a succeeded webhook', async () => {
+    const succeededIntent = {
+      id: 'pi_123',
+      status: 'succeeded',
+      currency: 'gbp',
+      amount: 3149,
+      metadata: {
+        firebaseUid: 'user-1',
+        orderId: 'order-1',
+        sellerId: 'seller-1',
+        charityId: 'charity-1',
+        productId: 'product-1',
+        shippingMethodId: '3747',
+        shippingMethodName: 'InPost locker',
+        pickupPointId: '13127548',
+        destinationCountry: 'GB',
+        destinationPostalCode: 'SE18 4QH',
+        shippingCarrier: 'inpost_gb',
+        shippingWeight: '2000',
+        productAmount: '2500',
+        shippingFee: '399',
+        securityFee: '250',
+        totalAmount: '3149',
+      },
+    };
+    mockRetrievePaymentIntent.mockResolvedValue(succeededIntent);
+
+    await new PaymentService().handleSucceededPaymentIntent('pi_123');
+
+    expect(mockFinalizePendingOrder).toHaveBeenCalledWith(
+      'order-1',
+      'pi_123',
+      expect.objectContaining({
+        userId: 'user-1',
+        totalAmount: 3149,
+        pickupPointId: '13127548',
+      }),
+    );
+    expect(mockProcessPaidOrder).toHaveBeenCalledWith('order-1');
+  });
+
+  it('releases the reserved stock after a canceled PaymentIntent', async () => {
+    await new PaymentService().handleCanceledPaymentIntent(
+      'pi_123',
+      'order-1',
+    );
+
+    expect(mockReleasePendingOrder).toHaveBeenCalledWith(
+      'order-1',
+      'pi_123',
+      true,
+    );
+  });
+
+  it('refunds a succeeded payment when its reservation is no longer usable', async () => {
+    mockRetrievePaymentIntent.mockResolvedValue({
+      id: 'pi_123',
+      status: 'succeeded',
+      currency: 'gbp',
+      amount: 3149,
+      metadata: {
+        firebaseUid: 'user-1',
+        orderId: 'order-1',
+        sellerId: 'seller-1',
+        charityId: 'charity-1',
+        productId: 'product-1',
+        shippingMethodId: '3747',
+        shippingMethodName: 'InPost locker',
+        pickupPointId: '13127548',
+        destinationCountry: 'GB',
+        destinationPostalCode: 'SE18 4QH',
+        shippingCarrier: 'inpost_gb',
+        shippingWeight: '2000',
+        productAmount: '2500',
+        shippingFee: '399',
+        securityFee: '250',
+        totalAmount: '3149',
+      },
+    });
+    mockFinalizePendingOrder.mockRejectedValue(
+      new PendingOrderUnavailableError('expired'),
+    );
+
+    await new PaymentService().handleSucceededPaymentIntent('pi_123');
+
+    const { stripe } = jest.requireMock('../../../shared/config/stripeConfig');
+    expect(stripe.refunds.create).toHaveBeenCalledWith(
+      { payment_intent: 'pi_123' },
+      { idempotencyKey: 'late-checkout-refund-pi_123' },
+    );
+    expect(mockMarkPaymentRefunded).toHaveBeenCalledWith(
+      'order-1',
+      'pi_123',
+    );
+    expect(mockProcessPaidOrder).not.toHaveBeenCalled();
   });
 });

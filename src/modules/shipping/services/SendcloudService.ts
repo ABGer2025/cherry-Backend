@@ -101,6 +101,32 @@ export class SendcloudService {
     }
   }
 
+  async findParcelByOrderNumber(
+    orderNumber: string,
+  ): Promise<SendcloudParcel | null> {
+    if (sendcloudConfig.mode === 'mock') {
+      return null;
+    }
+
+    try {
+      const response = await this.client.get('/parcels', {
+        params: { order_number: orderNumber },
+      });
+      const parcels: SendcloudParcel[] = response.data?.parcels ?? [];
+      return (
+        parcels.find((parcel) => parcel.order_number === orderNumber) ??
+        parcels[0] ??
+        null
+      );
+    } catch (error: any) {
+      const errorMessage =
+        error.response?.data?.error?.message ||
+        error.response?.data?.message ||
+        error.message;
+      throw new Error(`Sendcloud API Error: ${errorMessage}`);
+    }
+  }
+
   async getShippingMethods(): Promise<SendcloudShippingMethod[]> {
     try {
       const response = await this.client.get('/shipping_methods');

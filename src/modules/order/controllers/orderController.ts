@@ -1,22 +1,20 @@
 import { Request, Response } from 'express';
 import { ResponseHandler } from '../../../shared/utils/responseHandler';
 import { UserRepository } from '../../auth/repositories/UserRepository';
-import { OrderRepository } from '../repositories/OrderRepository';
-import { ShipmentService } from '../../shipping/services/ShipmentService';
+import {
+  FulfillmentJobBusyError,
+  OrderRepository,
+  PaymentOrderMismatchError,
+  PendingOrderUnavailableError,
+} from '../repositories/OrderRepository';
 import { PaymentService } from '../../payment/services/PaymentService';
-import { sendcloudConfig } from '../../../shared/config/sendcloudConfig';
-import { ProductRepository } from '../../products/repositories/ProductRepository';
-import { PostageSizeRepository } from '../../postage-sizes/repositories/PostageSizeRepository';
 import { ShipmentRepository } from '../../shipping/repositories/ShipmentRepository';
 import { Shipment } from '../../shipping/models/Shipment';
 import { Order, OrderDisputeReason } from '../model/Order';
 import { requireSingleParam } from '../../../shared/utils/requestParam';
-import { EmailService } from '../../notifications/services/EmailService';
-import { NotificationService } from '../../notifications/services/NotificationService';
 import { DisputeRepository } from '../../../disputes/DisputeRepository';
 import { DisputeSubmissionError } from '../../../disputes/Dispute';
-
-const ENFORCED_CARRIER = sendcloudConfig.enforcedCarrier;
+import { OrderFulfillmentService } from '../services/OrderFulfillmentService';
 
 const getDeliveryState = (
   order: Order,
@@ -202,8 +200,7 @@ export const createOrder = async (
       return;
     }
 
-    const email = dbUser.email;
-    const { productId, paymentIntentId, shipping, pickupPoint } = req.body;
+    const { orderId, paymentIntentId } = req.body;
 
     const paymentService = new PaymentService();
     let verifiedPayment;
@@ -222,120 +219,69 @@ export const createOrder = async (
       return;
     }
 
-    if (productId !== verifiedPayment.productId) {
+    if (orderId !== verifiedPayment.orderId) {
       ResponseHandler.badRequest(
         res,
-        'Product does not match payment',
-        'The product differs from the paid checkout',
-      );
-      return;
-    }
-
-    if (pickupPoint.id !== verifiedPayment.pickupPointId) {
-      ResponseHandler.badRequest(
-        res,
-        'Pickup point does not match payment',
-        'The selected pickup point differs from the paid checkout',
-      );
-      return;
-    }
-
-    if (
-      shipping.address.country !== verifiedPayment.destinationCountry ||
-      shipping.address.postal_code.replace(/\s/g, '').toUpperCase() !==
-        verifiedPayment.destinationPostalCode.replace(/\s/g, '').toUpperCase()
-    ) {
-      ResponseHandler.badRequest(
-        res,
-        'Shipping destination does not match payment',
-        'The shipping country or postcode differs from the paid checkout',
-      );
-      return;
-    }
-
-    const productRepo = new ProductRepository();
-    const product = await productRepo.getById(productId);
-
-    if (!product) {
-      ResponseHandler.notFound(
-        res,
-        'Product not found',
-        `Product with ID ${productId} does not exist`,
-      );
-      return;
-    }
-
-    if (!product.postageSize) {
-      ResponseHandler.badRequest(
-        res,
-        'Product postage size is missing',
-        'The product must have a postage size before an order can be created',
-      );
-      return;
-    }
-
-    const postageSizeRepo = new PostageSizeRepository();
-    const postageSize = await postageSizeRepo.getById(product.postageSize);
-
-    if (!postageSize) {
-      ResponseHandler.badRequest(
-        res,
-        'Invalid product postage size',
-        `Postage size ${product.postageSize} does not exist`,
-      );
-      return;
-    }
-
-    if (postageSize.weight !== verifiedPayment.shippingWeight) {
-      ResponseHandler.badRequest(
-        res,
-        'Product postage size changed',
-        'The product postage weight differs from the paid checkout',
-      );
-      return;
-    }
-
-    const normalizedPickupCarrier = String(
-      pickupPoint?.carrier || '',
-    ).toLowerCase();
-    if (
-      verifiedPayment.shippingCarrier !== ENFORCED_CARRIER ||
-      normalizedPickupCarrier !== ENFORCED_CARRIER
-    ) {
-      ResponseHandler.badRequest(
-        res,
-        'Invalid carrier',
-        `Only ${ENFORCED_CARRIER} carrier is supported`,
+        'Order does not match payment',
+        'The order differs from the paid checkout',
       );
       return;
     }
 
     const orderRepo = new OrderRepository();
+    const pendingOrder = await orderRepo.getOrderById(orderId);
+    if (!pendingOrder) {
+      ResponseHandler.notFound(res, 'Pending order not found');
+      return;
+    }
+
     let savedOrder;
     try {
-      savedOrder = await orderRepo.createPaidOrderAndDecrementInventory({
-        userId: firebaseUid,
-        email,
-        productAmount: verifiedPayment.productAmount,
-        shippingFee: verifiedPayment.shippingFee,
-        securityFee: verifiedPayment.securityFee,
-        totalAmount: verifiedPayment.totalAmount,
-        currency: verifiedPayment.currency,
-        productId: verifiedPayment.productId,
-        productName: product.name,
-        deliveryType: 'pickup_point',
-        shippingOptionId: verifiedPayment.shippingMethodId,
-        shippingOptionName: verifiedPayment.shippingMethodName,
-        shippingCarrier: verifiedPayment.shippingCarrier,
-        shippingWeight: verifiedPayment.shippingWeight,
-        shipping,
-        pickupPoint,
+      savedOrder = await orderRepo.finalizePendingOrder(
+        orderId,
         paymentIntentId,
-        paymentStatus: 'succeeded',
-        shipmentStatus: 'pending',
-        status: 'paid',
-      });
+        {
+          userId: verifiedPayment.firebaseUid,
+          sellerId: verifiedPayment.sellerId,
+          charityId: verifiedPayment.charityId,
+          productId: verifiedPayment.productId,
+          shippingMethodId: verifiedPayment.shippingMethodId,
+          shippingMethodName: verifiedPayment.shippingMethodName,
+          pickupPointId: verifiedPayment.pickupPointId,
+          destinationCountry: verifiedPayment.destinationCountry,
+          destinationPostalCode: verifiedPayment.destinationPostalCode,
+          shippingCarrier: verifiedPayment.shippingCarrier,
+          shippingWeight: verifiedPayment.shippingWeight,
+          productAmount: verifiedPayment.productAmount,
+          shippingFee: verifiedPayment.shippingFee,
+          securityFee: verifiedPayment.securityFee,
+          totalAmount: verifiedPayment.totalAmount,
+          currency: verifiedPayment.currency,
+        },
+      );
     } catch (err) {
+      if (err instanceof PaymentOrderMismatchError) {
+        await paymentService.refundUnavailablePayment(orderId, paymentIntentId);
+        res.status(409).json({
+          success: false,
+          code: 'PAYMENT_REFUNDED',
+          message: 'Order verification failed; the payment has been refunded',
+          data: { orderId, paymentStatus: 'refunded' },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+      if (err instanceof PendingOrderUnavailableError) {
+        await paymentService.refundUnavailablePayment(orderId, paymentIntentId);
+        res.status(409).json({
+          success: false,
+          code: 'PAYMENT_REFUNDED',
+          message: 'Checkout expired; the payment has been refunded',
+          data: { orderId, paymentStatus: 'refunded' },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
       if (
         err instanceof Error &&
         err.message === 'PaymentIntent has already been used'
@@ -346,9 +292,11 @@ export const createOrder = async (
       if (
         err instanceof Error &&
         [
-          'Product price changed',
           'Product is out of stock',
           'Product is not available',
+          'Pending order has expired',
+          'Pending order is no longer payable',
+          'Reserved product is no longer available',
         ].includes(err.message)
       ) {
         ResponseHandler.conflict(
@@ -361,92 +309,38 @@ export const createOrder = async (
       throw err;
     }
 
-    const shipmentService = new ShipmentService();
-
     try {
-      const { shipment, sendcloudParcel } =
-        await shipmentService.createShipmentForPaidOrder(savedOrder);
-
-      await orderRepo.updateOrder(savedOrder.id, {
-        shipmentId: shipment.id,
-        shipmentStatus: shipment.status,
-        status: 'shipment_created',
-      });
-
-      const emailService = new EmailService();
-      const notificationService = new NotificationService(emailService);
-      const emailUpdates: Partial<Order> = {};
-
-      try {
-        const seller = await userRepo.getById(product.userId);
-        if (seller) {
-          const result = await notificationService.sendSellerLabelEmail(
-            savedOrder,
-            seller,
-            shipment,
-          );
-
-          if (result.sent) {
-            emailUpdates.sellerSoldEmailSentAt = new Date();
-          }
-        } else {
-          console.warn(`Seller profile not found for product ${product.id}`);
-        }
-      } catch (err) {
-        console.error('Failed to send seller item sold email:', err);
-      }
-
-      try {
-        const result = await emailService.sendBuyerShipmentStartedEmail({
-          to: email,
-          buyerName: dbUser.firstname || dbUser.displayName,
-          productName: savedOrder.productName,
-          orderId: savedOrder.id,
-          trackingNumber: shipment.trackingNumber,
-          trackingUrl: shipment.trackingUrl,
-        });
-
-        if (result.sent) {
-          emailUpdates.buyerShipmentStartedEmailSentAt = new Date();
-        }
-      } catch (err) {
-        console.error('Failed to send buyer shipment started email:', err);
-      }
-
-      if (Object.keys(emailUpdates).length > 0) {
-        try {
-          await orderRepo.updateOrder(savedOrder.id, emailUpdates);
-        } catch (err) {
-          console.error('Failed to update order email timestamps:', err);
-        }
+      const fulfillment =
+        await new OrderFulfillmentService().processPaidOrder(savedOrder.id);
+      if (!fulfillment.shipment) {
+        throw new Error(
+          `Fulfillment completed without a shipment for order ${savedOrder.id}`,
+        );
       }
 
       ResponseHandler.success(
         res,
         {
           orderId: savedOrder.id,
-          shipment,
-          sendcloudParcel,
+          shipment: fulfillment.shipment,
+          sendcloudParcel: fulfillment.sendcloudParcel,
         },
         'Order and shipment created successfully',
       );
       return;
     } catch (err) {
-      console.error('Shipment creation failed after order creation:', err);
-
-      await orderRepo.updateOrder(savedOrder.id, {
-        shipmentStatus: 'pending',
-        status: 'shipment_pending',
-      });
+      if (!(err instanceof FulfillmentJobBusyError)) {
+        console.error('Order fulfillment is pending retry:', err);
+      }
 
       ResponseHandler.custom(
         res,
         202,
         true,
-        'Order created, shipment pending',
+        'Order paid; fulfillment is pending retry',
         {
           orderId: savedOrder.id,
-          shipmentStatus: 'pending',
+          fulfillmentStatus: 'pending',
         },
         err instanceof Error ? err.message : 'Shipment creation failed',
       );

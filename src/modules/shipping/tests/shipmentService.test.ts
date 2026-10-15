@@ -18,6 +18,8 @@ describe('ShipmentService.createShipmentForPaidOrder', () => {
   const order: Order = {
     id: 'order-1',
     userId: 'buyer-1',
+    sellerId: 'seller-1',
+    charityId: 'charity-1',
     email: 'buyer@example.com',
     productAmount: 2000,
     shippingFee: 399,
@@ -67,6 +69,7 @@ describe('ShipmentService.createShipmentForPaidOrder', () => {
       })),
     };
     const sendcloudService = {
+      findParcelByOrderNumber: jest.fn().mockResolvedValue(null),
       createParcel: jest.fn().mockResolvedValue({
         id: 99,
         tracking_number: 'TRACK123',
@@ -137,6 +140,34 @@ describe('ShipmentService.createShipmentForPaidOrder', () => {
         },
         to_service_point: 999,
       }),
+    );
+  });
+
+  it('recovers an existing Sendcloud parcel instead of creating a duplicate', async () => {
+    const { service, sendcloudService, shipmentRepository } = createService();
+    sendcloudService.findParcelByOrderNumber.mockResolvedValue({
+      id: 101,
+      order_number: 'order-1',
+      tracking_number: 'RECOVERED123',
+      tracking_url: 'https://track.example/recovered',
+      carrier: { name: 'inpost_gb' },
+    });
+
+    const result = await service.createShipmentForPaidOrder(order);
+
+    expect(sendcloudService.findParcelByOrderNumber).toHaveBeenCalledWith(
+      'order-1',
+    );
+    expect(sendcloudService.createParcel).not.toHaveBeenCalled();
+    expect(shipmentRepository.createShipment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderId: 'order-1',
+        sendcloudId: 101,
+        trackingNumber: 'RECOVERED123',
+      }),
+    );
+    expect(result.sendcloudParcel).toEqual(
+      expect.objectContaining({ id: 101 }),
     );
   });
 });

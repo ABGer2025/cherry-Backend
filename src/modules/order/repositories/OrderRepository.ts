@@ -1,6 +1,34 @@
 import { firestore } from '../../../shared/config/firebaseConfig';
+import { FieldValue } from 'firebase-admin/firestore';
 import { gbpToPence } from '../../../shared/utils/money';
+import { FulfillmentJob } from '../model/FulfillmentJob';
 import { Order } from '../model/Order';
+
+const PAYMENT_RESERVATION_MS = 15 * 60 * 1000;
+const FULFILLMENT_LEASE_MS = 10 * 60 * 1000;
+
+export class PendingOrderUnavailableError extends Error {
+  constructor(
+    public readonly reason: 'expired' | 'unavailable' | 'not_payable',
+  ) {
+    super(`Pending order cannot be finalized: ${reason}`);
+    this.name = 'PendingOrderUnavailableError';
+  }
+}
+
+export class FulfillmentJobBusyError extends Error {
+  constructor(orderId: string) {
+    super(`Fulfillment job for order ${orderId} is already being processed`);
+    this.name = 'FulfillmentJobBusyError';
+  }
+}
+
+export class PaymentOrderMismatchError extends Error {
+  constructor() {
+    super('Pending order does not match verified payment');
+    this.name = 'PaymentOrderMismatchError';
+  }
+}
 
 const removeUndefinedValues = <T extends Record<string, unknown>>(
   value: T,
@@ -9,50 +37,73 @@ const removeUndefinedValues = <T extends Record<string, unknown>>(
     Object.entries(value).filter(([, entryValue]) => entryValue !== undefined),
   ) as T;
 
-export interface CreateOrderInput {
+export type CreatePendingOrderInput = Pick<
+  Order,
+  | 'userId'
+  | 'sellerId'
+  | 'charityId'
+  | 'email'
+  | 'productAmount'
+  | 'shippingFee'
+  | 'securityFee'
+  | 'totalAmount'
+  | 'currency'
+  | 'productId'
+  | 'productName'
+  | 'deliveryType'
+  | 'shippingOptionId'
+  | 'shippingOptionName'
+  | 'shippingCarrier'
+  | 'shippingWeight'
+  | 'shipping'
+  | 'pickupPoint'
+>;
+
+export interface VerifiedOrderPayment {
   userId: string;
-  email: string;
+  sellerId: string;
+  charityId: string;
+  productId: string;
+  shippingMethodId: string;
+  shippingMethodName: string;
+  pickupPointId: string;
+  destinationCountry: string;
+  destinationPostalCode: string;
+  shippingCarrier: string;
+  shippingWeight: number;
   productAmount: number;
   shippingFee: number;
   securityFee: number;
   totalAmount: number;
   currency: 'GBP';
-  productId: string;
-  productName: string;
-  deliveryType: Order['deliveryType'];
-  shippingOptionId: string;
-  shippingOptionName: string;
-  shippingCarrier: string;
-  shippingWeight: number;
-  shipping: Order['shipping'];
-  pickupPoint: Order['pickupPoint'];
-  paymentIntentId: string;
-  paymentStatus: Order['paymentStatus'];
-  shipmentStatus: Order['shipmentStatus'];
-  status: Order['status'];
-  shipmentId?: string;
 }
 
 export class OrderRepository {
-  async createPaidOrderAndDecrementInventory(
-    input: CreateOrderInput,
+  createOrderId(): string {
+    return firestore.collection('orders').doc().id;
+  }
+
+  async createPendingOrder(
+    orderId: string,
+    input: CreatePendingOrderInput,
   ): Promise<Order> {
-    const orderRef = firestore.collection('orders').doc();
-    const paymentLockRef = firestore
-      .collection('order_payment_intents')
-      .doc(input.paymentIntentId);
+    const orderRef = firestore.collection('orders').doc(orderId);
     const productRef = firestore.collection('products').doc(input.productId);
+    const pendingOrdersQuery = firestore
+      .collection('orders')
+      .where('productId', '==', input.productId)
+      .where('status', '==', 'pending_payment');
 
     return firestore.runTransaction(async (transaction) => {
-      const [paymentLock, productDoc] = await Promise.all([
-        transaction.get(paymentLockRef),
+      const [orderDoc, pendingOrders, productDoc] = await Promise.all([
+        transaction.get(orderRef),
+        transaction.get(pendingOrdersQuery),
         transaction.get(productRef),
       ]);
 
-      if (paymentLock.exists) {
-        throw new Error('PaymentIntent has already been used');
+      if (orderDoc.exists) {
+        throw new Error('Order already exists');
       }
-
       if (!productDoc.exists) {
         throw new Error('Product not found');
       }
@@ -60,13 +111,7 @@ export class OrderRepository {
       const productData = productDoc.data()!;
       const quantity =
         typeof productData.number === 'number' ? productData.number : 0;
-      const productStatus =
-        typeof productData.status === 'string' ? productData.status : 'active';
-      if (quantity <= 0) {
-        throw new Error('Product is out of stock');
-      }
-
-      if (productStatus !== 'active') {
+      if (quantity <= 0 || productData.status !== 'active') {
         throw new Error('Product is not available');
       }
 
@@ -77,54 +122,442 @@ export class OrderRepository {
         throw new Error('Product price changed');
       }
 
-      const orderData = this.buildOrderData(input);
-      transaction.set(orderRef, {
-        ...orderData,
-        email: input.email,
+      const now = new Date();
+      let activeReservations = 0;
+      pendingOrders.docs.forEach((pendingOrder) => {
+        const pendingData = pendingOrder.data();
+        const expiresAt = this.toDate(pendingData.paymentExpiresAt);
+        if (expiresAt && expiresAt.getTime() > now.getTime()) {
+          activeReservations += 1;
+        } else {
+          transaction.update(pendingOrder.ref, {
+            status: 'expired',
+            reservationActive: false,
+            updatedAt: now,
+          });
+        }
       });
+
+      if (quantity - activeReservations <= 0) {
+        throw new Error('Product is out of stock');
+      }
+
+      const paymentExpiresAt = new Date(now.getTime() + PAYMENT_RESERVATION_MS);
+      const orderData = removeUndefinedValues({
+        ...input,
+        paymentStatus: 'pending' as const,
+        status: 'pending_payment' as const,
+        shipmentStatus: 'pending' as const,
+        paymentExpiresAt,
+        reservationActive: true,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      transaction.set(orderRef, orderData);
       transaction.update(productRef, {
-        number: quantity - 1,
-        status: quantity - 1 <= 0 ? 'sold' : 'active',
-        updatedAt: new Date(),
-      });
-      transaction.set(paymentLockRef, {
-        orderId: orderRef.id,
-        userId: input.userId,
-        createdAt: new Date(),
+        checkoutReservationVersion: FieldValue.increment(1),
       });
 
       return {
         id: orderRef.id,
-        email: input.email,
         ...orderData,
       } as Order;
     });
   }
 
-  private buildOrderData(input: CreateOrderInput): Omit<Order, 'id' | 'email'> {
-    return removeUndefinedValues({
-      userId: input.userId,
-      productAmount: input.productAmount,
-      shippingFee: input.shippingFee,
-      securityFee: input.securityFee,
-      totalAmount: input.totalAmount,
-      currency: input.currency,
-      productId: input.productId,
-      productName: input.productName,
-      deliveryType: input.deliveryType,
-      shippingOptionId: input.shippingOptionId,
-      shippingOptionName: input.shippingOptionName,
-      shippingCarrier: input.shippingCarrier,
-      shippingWeight: input.shippingWeight,
-      shipping: input.shipping,
-      pickupPoint: input.pickupPoint,
-      paymentIntentId: input.paymentIntentId,
-      paymentStatus: input.paymentStatus,
-      shipmentStatus: input.shipmentStatus,
-      status: input.status,
-      shipmentId: input.shipmentId,
-      createdAt: new Date(),
-    }) as Omit<Order, 'id' | 'email'>;
+  async attachPaymentIntent(
+    orderId: string,
+    paymentIntentId: string,
+  ): Promise<void> {
+    const orderRef = firestore.collection('orders').doc(orderId);
+    await firestore.runTransaction(async (transaction) => {
+      const orderDoc = await transaction.get(orderRef);
+      if (!orderDoc.exists) {
+        throw new Error('Pending order not found');
+      }
+
+      const orderData = orderDoc.data()!;
+      if (
+        orderData.paymentIntentId &&
+        orderData.paymentIntentId !== paymentIntentId
+      ) {
+        throw new Error('Pending order is already linked to another payment');
+      }
+      if (
+        orderData.status !== 'pending_payment' &&
+        orderData.paymentIntentId !== paymentIntentId
+      ) {
+        throw new Error('Pending order is no longer payable');
+      }
+
+      transaction.update(orderRef, {
+        paymentIntentId,
+        updatedAt: new Date(),
+      });
+    });
+  }
+
+  async releasePendingOrder(
+    orderId: string,
+    paymentIntentId?: string,
+    cancelled = false,
+  ): Promise<void> {
+    const orderRef = firestore.collection('orders').doc(orderId);
+    await firestore.runTransaction(async (transaction) => {
+      const orderDoc = await transaction.get(orderRef);
+      if (!orderDoc.exists) {
+        throw new Error('Pending order not found');
+      }
+      if (orderDoc.data()!.status !== 'pending_payment') {
+        return;
+      }
+
+      const orderData = orderDoc.data()!;
+      if (
+        paymentIntentId &&
+        orderData.paymentIntentId !== paymentIntentId
+      ) {
+        throw new Error('PaymentIntent does not match pending order');
+      }
+      const productRef = firestore
+        .collection('products')
+        .doc(orderData.productId);
+      const productDoc = await transaction.get(productRef);
+
+      transaction.update(orderRef, {
+        status: cancelled ? 'cancelled' : 'failed',
+        paymentStatus: cancelled ? 'cancelled' : 'failed',
+        reservationActive: false,
+        updatedAt: new Date(),
+      });
+      if (productDoc.exists) {
+        transaction.update(productRef, {
+          checkoutReservationVersion: FieldValue.increment(1),
+        });
+      }
+    });
+  }
+
+  async finalizePendingOrder(
+    orderId: string,
+    paymentIntentId: string,
+    payment: VerifiedOrderPayment,
+  ): Promise<Order> {
+    const orderRef = firestore.collection('orders').doc(orderId);
+    const fulfillmentJobRef = firestore
+      .collection('order_fulfillment_jobs')
+      .doc(orderId);
+    const paymentLockRef = firestore
+      .collection('order_payment_intents')
+      .doc(paymentIntentId);
+
+    const result = await firestore.runTransaction(async (transaction) => {
+      const [orderDoc, paymentLock, fulfillmentJobDoc] = await Promise.all([
+        transaction.get(orderRef),
+        transaction.get(paymentLockRef),
+        transaction.get(fulfillmentJobRef),
+      ]);
+
+      if (!orderDoc.exists) {
+        throw new Error('Pending order not found');
+      }
+
+      const orderData = orderDoc.data()!;
+      if (orderData.userId !== payment.userId) {
+        throw new Error('Order does not belong to the authenticated user');
+      }
+      if (paymentLock.exists && paymentLock.data()!.orderId === orderId) {
+        if (orderData.paymentIntentId !== paymentIntentId) {
+          throw new Error('Order is linked to a different payment');
+        }
+        if (!this.orderMatchesPayment(orderData, payment)) {
+          throw new Error('Paid order does not match verified payment');
+        }
+        if (!fulfillmentJobDoc.exists) {
+          transaction.create(
+            fulfillmentJobRef,
+            this.createFulfillmentJobData(orderId, new Date(), orderData),
+          );
+        }
+        return this.mapToOrder(orderId, orderData);
+      }
+      if (paymentLock.exists) {
+        throw new Error('PaymentIntent has already been used');
+      }
+      if (
+        orderData.paymentIntentId &&
+        orderData.paymentIntentId !== paymentIntentId
+      ) {
+        throw new Error('PaymentIntent does not match pending order');
+      }
+      if (orderData.status !== 'pending_payment') {
+        if (['expired', 'failed', 'cancelled'].includes(orderData.status)) {
+          throw new PendingOrderUnavailableError('not_payable');
+        }
+        throw new Error('Pending order is no longer payable');
+      }
+      if (fulfillmentJobDoc.exists) {
+        throw new Error('Fulfillment job already exists for unpaid order');
+      }
+
+      const productRef = firestore
+        .collection('products')
+        .doc(orderData.productId);
+      const productDoc = await transaction.get(productRef);
+      if (!this.orderMatchesPayment(orderData, payment)) {
+        const now = new Date();
+        transaction.update(orderRef, {
+          paymentIntentId,
+          status: 'failed',
+          paymentStatus: 'failed',
+          reservationActive: false,
+          updatedAt: now,
+        });
+        if (productDoc.exists) {
+          transaction.update(productRef, {
+            checkoutReservationVersion: FieldValue.increment(1),
+          });
+        }
+        return 'mismatch' as const;
+      }
+      const paymentExpiresAt = this.toDate(orderData.paymentExpiresAt);
+      if (!paymentExpiresAt || paymentExpiresAt.getTime() <= Date.now()) {
+        transaction.update(orderRef, {
+          paymentIntentId,
+          status: 'expired',
+          reservationActive: false,
+          updatedAt: new Date(),
+        });
+        if (productDoc.exists) {
+          transaction.update(productRef, {
+            checkoutReservationVersion: FieldValue.increment(1),
+          });
+        }
+        return 'expired' as const;
+      }
+
+      if (!productDoc.exists || orderData.reservationActive !== true) {
+        transaction.update(orderRef, {
+          paymentIntentId,
+          status: 'failed',
+          paymentStatus: 'failed',
+          reservationActive: false,
+          updatedAt: new Date(),
+        });
+        return 'unavailable' as const;
+      }
+
+      const productData = productDoc.data()!;
+      const quantity =
+        typeof productData.number === 'number' ? productData.number : 0;
+      if (quantity <= 0) {
+        transaction.update(orderRef, {
+          paymentIntentId,
+          status: 'failed',
+          paymentStatus: 'failed',
+          reservationActive: false,
+          updatedAt: new Date(),
+        });
+        transaction.update(productRef, {
+          checkoutReservationVersion: FieldValue.increment(1),
+        });
+        return 'unavailable' as const;
+      }
+
+      const now = new Date();
+      transaction.update(orderRef, {
+        paymentIntentId,
+        paymentStatus: 'succeeded',
+        status: 'paid',
+        reservationActive: false,
+        paidAt: now,
+        updatedAt: now,
+      });
+      transaction.update(productRef, {
+        number: quantity - 1,
+        status:
+          quantity - 1 <= 0
+            ? 'sold'
+            : typeof productData.status === 'string'
+              ? productData.status
+              : 'active',
+        checkoutReservationVersion: FieldValue.increment(1),
+        updatedAt: now,
+      });
+      transaction.set(paymentLockRef, {
+        orderId,
+        userId: payment.userId,
+        createdAt: now,
+      });
+      transaction.create(
+        fulfillmentJobRef,
+        this.createFulfillmentJobData(orderId, now),
+      );
+
+      return {
+        id: orderId,
+        ...orderData,
+        paymentIntentId,
+        paymentStatus: 'succeeded',
+        status: 'paid',
+        reservationActive: false,
+        paidAt: now,
+        updatedAt: now,
+      } as Order;
+    });
+
+    if (result === 'expired') {
+      throw new PendingOrderUnavailableError('expired');
+    }
+    if (result === 'unavailable') {
+      throw new PendingOrderUnavailableError('unavailable');
+    }
+    if (result === 'mismatch') {
+      throw new PaymentOrderMismatchError();
+    }
+    return result;
+  }
+
+  async markPaymentRefunded(
+    orderId: string,
+    paymentIntentId: string,
+  ): Promise<void> {
+    const orderRef = firestore.collection('orders').doc(orderId);
+    await firestore.runTransaction(async (transaction) => {
+      const orderDoc = await transaction.get(orderRef);
+      if (!orderDoc.exists) {
+        throw new Error('Order not found while recording refund');
+      }
+
+      const orderData = orderDoc.data()!;
+      if (orderData.paymentIntentId !== paymentIntentId) {
+        throw new Error('Refund does not match order payment');
+      }
+      if (orderData.paymentStatus === 'refunded') {
+        return;
+      }
+      if (!['expired', 'failed', 'cancelled'].includes(orderData.status)) {
+        throw new Error('Only unavailable orders can be marked refunded');
+      }
+
+      transaction.update(orderRef, {
+        paymentStatus: 'refunded',
+        refundedAt: new Date(),
+        updatedAt: new Date(),
+      });
+    });
+  }
+
+  private orderMatchesPayment(
+    order: Record<string, any>,
+    payment: VerifiedOrderPayment,
+  ): boolean {
+    return (
+      order.sellerId === payment.sellerId &&
+      order.charityId === payment.charityId &&
+      order.productId === payment.productId &&
+      order.productAmount === payment.productAmount &&
+      order.shippingFee === payment.shippingFee &&
+      order.securityFee === payment.securityFee &&
+      order.totalAmount === payment.totalAmount &&
+      order.currency === payment.currency &&
+      order.shippingOptionId === payment.shippingMethodId &&
+      order.shippingOptionName === payment.shippingMethodName &&
+      order.shippingWeight === payment.shippingWeight &&
+      order.shippingCarrier === payment.shippingCarrier &&
+      order.pickupPoint?.id === payment.pickupPointId &&
+      String(order.shipping?.address?.country ?? '').toUpperCase() ===
+        payment.destinationCountry.toUpperCase() &&
+      this.normalizePostalCode(order.shipping?.address?.postal_code ?? '') ===
+        this.normalizePostalCode(payment.destinationPostalCode)
+    );
+  }
+
+  private normalizePostalCode(postalCode: string): string {
+    return postalCode.replace(/\s/g, '').toUpperCase();
+  }
+
+  async getFulfillmentJob(orderId: string): Promise<FulfillmentJob | null> {
+    const jobDoc = await firestore
+      .collection('order_fulfillment_jobs')
+      .doc(orderId)
+      .get();
+    if (!jobDoc.exists) {
+      return null;
+    }
+    return {
+      orderId,
+      ...jobDoc.data(),
+    } as FulfillmentJob;
+  }
+
+  async claimFulfillmentJob(orderId: string): Promise<'claimed' | 'completed'> {
+    const jobRef = firestore
+      .collection('order_fulfillment_jobs')
+      .doc(orderId);
+    return firestore.runTransaction(async (transaction) => {
+      const jobDoc = await transaction.get(jobRef);
+      if (!jobDoc.exists) {
+        throw new Error(`Fulfillment job for order ${orderId} was not found`);
+      }
+
+      const job = jobDoc.data()!;
+      if (job.status === 'completed') {
+        return 'completed';
+      }
+
+      const now = new Date();
+      const leaseUntil = this.toDate(job.leaseUntil);
+      if (job.status === 'processing' && leaseUntil && leaseUntil > now) {
+        throw new FulfillmentJobBusyError(orderId);
+      }
+
+      transaction.update(jobRef, {
+        status: 'processing',
+        attempts: (typeof job.attempts === 'number' ? job.attempts : 0) + 1,
+        leaseUntil: new Date(now.getTime() + FULFILLMENT_LEASE_MS),
+        updatedAt: now,
+      });
+      return 'claimed';
+    });
+  }
+
+  async updateFulfillmentJob(
+    orderId: string,
+    updates: Partial<FulfillmentJob>,
+  ): Promise<void> {
+    await firestore
+      .collection('order_fulfillment_jobs')
+      .doc(orderId)
+      .update({
+        ...updates,
+        updatedAt: new Date(),
+      });
+  }
+
+  async retryFulfillmentJob(orderId: string, error: unknown): Promise<void> {
+    await firestore
+      .collection('order_fulfillment_jobs')
+      .doc(orderId)
+      .update({
+        status: 'pending',
+        leaseUntil: FieldValue.delete(),
+        lastError: error instanceof Error ? error.message : String(error),
+        updatedAt: new Date(),
+      });
+  }
+
+  async completeFulfillmentJob(orderId: string): Promise<void> {
+    await firestore
+      .collection('order_fulfillment_jobs')
+      .doc(orderId)
+      .update({
+        status: 'completed',
+        leaseUntil: FieldValue.delete(),
+        lastError: null,
+        updatedAt: new Date(),
+      });
   }
 
   async getOrderById(id: string): Promise<Order | null> {
@@ -175,31 +608,53 @@ export class OrderRepository {
     return snapshot.docs.map((doc) => this.mapToOrder(doc.id, doc.data()));
   }
 
-  private mapToOrder(id: string, data: FirebaseFirestore.DocumentData): Order {
-    const toDate = (value: unknown): Date | undefined => {
-      if (!value) {
-        return undefined;
-      }
-
-      if (typeof (value as { toDate?: unknown }).toDate === 'function') {
-        return (value as { toDate: () => Date }).toDate();
-      }
-
-      const date = new Date(value as string | number | Date);
-      return Number.isNaN(date.getTime()) ? undefined : date;
+  private createFulfillmentJobData(
+    orderId: string,
+    now = new Date(),
+    orderData?: FirebaseFirestore.DocumentData,
+  ) {
+    return {
+      orderId,
+      status: 'pending' as const,
+      attempts: 0,
+      shipmentCompleted: Boolean(orderData?.shipmentId),
+      sellerNotificationCompleted: Boolean(orderData?.sellerSoldEmailSentAt),
+      buyerNotificationCompleted: Boolean(
+        orderData?.buyerShipmentStartedEmailSentAt,
+      ),
+      lastError: null,
+      createdAt: now,
+      updatedAt: now,
     };
+  }
 
+  private mapToOrder(id: string, data: FirebaseFirestore.DocumentData): Order {
     return {
       id,
       ...data,
-      createdAt: toDate(data.createdAt) ?? new Date(data.createdAt),
-      buyerConfirmedReceivedAt: toDate(data.buyerConfirmedReceivedAt),
-      sellerSoldEmailSentAt: toDate(data.sellerSoldEmailSentAt),
-      buyerShipmentStartedEmailSentAt: toDate(
+      createdAt: this.toDate(data.createdAt) ?? new Date(data.createdAt),
+      paymentExpiresAt: this.toDate(data.paymentExpiresAt),
+      paidAt: this.toDate(data.paidAt),
+      buyerConfirmedReceivedAt: this.toDate(data.buyerConfirmedReceivedAt),
+      sellerSoldEmailSentAt: this.toDate(data.sellerSoldEmailSentAt),
+      buyerShipmentStartedEmailSentAt: this.toDate(
         data.buyerShipmentStartedEmailSentAt,
       ),
-      buyerDeliveryEmailSentAt: toDate(data.buyerDeliveryEmailSentAt),
-      buyerDisputedAt: toDate(data.buyerDisputedAt),
+      buyerDeliveryEmailSentAt: this.toDate(data.buyerDeliveryEmailSentAt),
+      buyerDisputedAt: this.toDate(data.buyerDisputedAt),
     } as Order;
+  }
+
+  private toDate(value: unknown): Date | undefined {
+    if (!value) {
+      return undefined;
+    }
+
+    if (typeof (value as { toDate?: unknown }).toDate === 'function') {
+      return (value as { toDate: () => Date }).toDate();
+    }
+
+    const date = new Date(value as string | number | Date);
+    return Number.isNaN(date.getTime()) ? undefined : date;
   }
 }

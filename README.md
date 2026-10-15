@@ -83,6 +83,7 @@ Recommended defaults:
 - Use `SENDCLOUD_LABEL_MODE=test` in development and `SENDCLOUD_LABEL_MODE=live` in production when real labels should be generated
 - Keep `EMAIL_MODE=off` unless you are intentionally sending email through Resend
 - Only use live Sendcloud credentials when you are deliberately testing the live shipping integration
+- Fulfillment runs synchronously after payment confirmation. A Firestore fulfillment job records progress so webhook or client retries can resume safely.
 
 See `.env.example` for the full template.
 

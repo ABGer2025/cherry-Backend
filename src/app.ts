@@ -22,7 +22,6 @@ app.use(express.json({
         (req as any).rawBody = Buffer.from(buffer);
     },
 }));
-
 import productRoutes from './modules/products/routes/productRoutes';
 import categoryRoutes from './modules/categories/routes/categoryRoutes';
 import charityRoutes from './modules/charities/routes/charityRoutes';

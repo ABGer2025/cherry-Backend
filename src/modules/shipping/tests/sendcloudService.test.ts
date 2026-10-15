@@ -98,6 +98,18 @@ describe('SendcloudService.getPickupPoints()', () => {
     expect(result).toEqual([]);
   });
 
+  it('finds a parcel by its order number', async () => {
+    const parcel = { id: 99, order_number: 'order-1' };
+    mockGet.mockResolvedValue({ data: { parcels: [parcel] } });
+
+    const result = await service.findParcelByOrderNumber('order-1');
+
+    expect(mockGet).toHaveBeenCalledWith('/parcels', {
+      params: { order_number: 'order-1' },
+    });
+    expect(result).toEqual(parcel);
+  });
+
   it('throws a descriptive error when Sendcloud API returns an error', async () => {
     mockGet.mockRejectedValue({
       response: { data: { error: { message: 'Invalid postcode' } } },

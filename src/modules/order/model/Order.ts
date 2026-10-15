@@ -40,11 +40,18 @@ export interface PickupPointSelection {
 export interface Order {
   id: string;
   userId: string;
+  sellerId: string;
+  charityId: string;
   email: string;
   productAmount: number;
   shippingFee: number;
   securityFee: number;
   totalAmount: number;
+  // Financial breakdown in pence. Absent on orders created before it was
+  // recorded; stripeFee and cherryRevenue are null until Stripe reports its fee.
+  charityProceeds?: number;
+  stripeFee?: number | null;
+  cherryRevenue?: number | null;
   currency: 'GBP';
   productId: string;
   productName: string;
@@ -59,9 +66,11 @@ export interface Order {
     telephone: string;
   };
   pickupPoint: PickupPointSelection;
-  paymentIntentId: string;
-  paymentStatus: 'succeeded';
+  paymentIntentId?: string;
+  paymentStatus: 'pending' | 'succeeded' | 'failed' | 'cancelled' | 'refunded';
   status:
+    | 'pending_payment'
+    | 'expired'
     | 'paid'
     | 'shipment_pending'
     | 'shipment_created'
@@ -71,6 +80,11 @@ export interface Order {
     | 'failed';
   shipmentStatus: ShipmentStatus;
   shipmentId?: string;
+  paymentExpiresAt?: Date;
+  reservationActive?: boolean;
+  paidAt?: Date;
+  refundedAt?: Date;
+  updatedAt?: Date;
   buyerConfirmedReceived?: boolean;
   buyerConfirmedReceivedAt?: Date;
   sellerSoldEmailSentAt?: Date;

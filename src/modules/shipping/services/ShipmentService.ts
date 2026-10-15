@@ -65,8 +65,10 @@ export class ShipmentService {
       parcelData.to_service_point = Number(order.pickupPoint.id);
     }
 
+    const recoveredParcel =
+      await this.sendcloudService.findParcelByOrderNumber(order.id);
     const sendcloudParcel =
-      await this.sendcloudService.createParcel(parcelData);
+      recoveredParcel ?? await this.sendcloudService.createParcel(parcelData);
 
     const shipment = await this.shipmentRepository.createShipment({
       orderId: order.id,
