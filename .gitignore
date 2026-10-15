@@ -146,6 +146,8 @@ Dockerfile.dev
 # Local development
 .env.development
 .env.production
+deploy-dev.sh
+deploy-prod.sh
 
 
 # Backup files
