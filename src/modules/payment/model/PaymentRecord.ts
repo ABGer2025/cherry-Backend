@@ -13,6 +13,9 @@ export interface PaymentRecord {
   productAmount: number | null;
   shippingFee: number | null;
   securityFee: number | null;
+  charityProceeds: number | null;
+  stripeFee: number | null;
+  cherryRevenue: number | null;
   stripeChargeId: string | null;
   stripeBalanceTransactionId: string | null;
   paidAt: Date;

@@ -6,6 +6,7 @@ import {
   CheckoutPaymentDetails,
   parseCheckoutPaymentIntent,
 } from '../utils/checkoutPaymentIntent';
+import { calculateFinancialBreakdown } from './financialBreakdown';
 
 export type WebhookOutcome =
   | { action: 'ignored'; eventType: string }
@@ -21,6 +22,7 @@ interface ChargeDetails {
   chargeId: string | null;
   balanceTransactionId: string | null;
   chargedAt: Date | null;
+  stripeFee: number | null;
 }
 
 const idOf = (value: string | { id: string } | null | undefined) =>
@@ -50,6 +52,14 @@ export class StripeWebhookService {
     const { flagReason, pricing } = this.checkPayment(paymentIntent);
     const charge = await this.getChargeDetails(paymentIntent);
     const metadata = paymentIntent.metadata ?? {};
+    const financialBreakdown = pricing
+      ? calculateFinancialBreakdown({
+          productAmount: pricing.productAmount,
+          shippingFee: pricing.shippingFee,
+          securityFee: pricing.securityFee,
+          stripeFee: charge.stripeFee,
+        })
+      : null;
 
     const record: PaymentRecordInput = {
       paymentIntentId: paymentIntent.id,
@@ -62,6 +72,9 @@ export class StripeWebhookService {
       productAmount: pricing?.productAmount ?? null,
       shippingFee: pricing?.shippingFee ?? null,
       securityFee: pricing?.securityFee ?? null,
+      charityProceeds: financialBreakdown?.charityProceeds ?? null,
+      stripeFee: financialBreakdown?.stripeFee ?? null,
+      cherryRevenue: financialBreakdown?.cherryRevenue ?? null,
       stripeChargeId: charge.chargeId,
       stripeBalanceTransactionId: charge.balanceTransactionId,
       paidAt: charge.chargedAt ?? new Date(event.created * 1000),
@@ -123,7 +136,12 @@ export class StripeWebhookService {
       paymentIntent.latest_charge ?? legacyCharges?.data?.[0] ?? null;
     const chargeId = idOf(latestCharge);
     if (!chargeId) {
-      return { chargeId: null, balanceTransactionId: null, chargedAt: null };
+      return {
+        chargeId: null,
+        balanceTransactionId: null,
+        chargedAt: null,
+        stripeFee: null,
+      };
     }
 
     try {
@@ -131,17 +149,55 @@ export class StripeWebhookService {
         typeof latestCharge === 'string'
           ? await stripe.charges.retrieve(chargeId)
           : (latestCharge as Stripe.Charge);
+      const balanceTransactionId = idOf(charge.balance_transaction);
+      let stripeFee: number | null = null;
+      if (
+        charge.balance_transaction &&
+        typeof charge.balance_transaction !== 'string'
+      ) {
+        stripeFee = this.readGbpStripeFee(charge.balance_transaction);
+      } else if (balanceTransactionId) {
+        try {
+          const balanceTransaction =
+            await stripe.balanceTransactions.retrieve(balanceTransactionId);
+          stripeFee = this.readGbpStripeFee(balanceTransaction);
+        } catch (err) {
+          console.warn(
+            `Could not load Stripe balance transaction ${balanceTransactionId}:`,
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
+
       return {
         chargeId,
-        balanceTransactionId: idOf(charge.balance_transaction),
+        balanceTransactionId,
         chargedAt: charge.created ? new Date(charge.created * 1000) : null,
+        stripeFee,
       };
     } catch (err) {
       console.warn(
         `Could not load Stripe charge ${chargeId} for ${paymentIntent.id}:`,
         err instanceof Error ? err.message : err,
       );
-      return { chargeId, balanceTransactionId: null, chargedAt: null };
+      return {
+        chargeId,
+        balanceTransactionId: null,
+        chargedAt: null,
+        stripeFee: null,
+      };
     }
+  }
+
+  private readGbpStripeFee(
+    balanceTransaction: Stripe.BalanceTransaction,
+  ): number | null {
+    if (balanceTransaction.currency.toLowerCase() !== 'gbp') {
+      return null;
+    }
+    return Number.isInteger(balanceTransaction.fee) &&
+      balanceTransaction.fee >= 0
+      ? balanceTransaction.fee
+      : null;
   }
 }

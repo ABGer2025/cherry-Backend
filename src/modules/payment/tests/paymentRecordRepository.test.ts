@@ -24,6 +24,9 @@ const paidInput = (
   productAmount: 2500,
   shippingFee: 399,
   securityFee: 250,
+  charityProceeds: 2500,
+  stripeFee: 95,
+  cherryRevenue: 155,
   stripeChargeId: 'ch_123',
   stripeBalanceTransactionId: 'txn_123',
   paidAt: new Date('2026-10-05T10:00:00Z'),
@@ -58,6 +61,9 @@ describe('PaymentRecordRepository.recordPayment', () => {
     expect(fake.store.get('payments/pi_123')!.orderId).toBe('order-1');
     expect(fake.store.get('orders/order-1')).toEqual({
       status: 'shipment_created',
+      charityProceeds: 2500,
+      stripeFee: 95,
+      cherryRevenue: 155,
     });
   });
 
@@ -91,7 +97,12 @@ describe('PaymentRecordRepository.recordPayment', () => {
       stripeChargeId: 'ch_123',
       stripeBalanceTransactionId: 'txn_123',
     });
-    expect(fake.store.get('orders/order-1')).toEqual({ status: 'paid' });
+    expect(fake.store.get('orders/order-1')).toEqual({
+      status: 'paid',
+      charityProceeds: 2500,
+      stripeFee: 95,
+      cherryRevenue: 155,
+    });
   });
 
   it('never downgrades a paid payment to flagged', async () => {

@@ -1,7 +1,11 @@
 const mockRetrieveCharge = jest.fn();
+const mockRetrieveBalanceTransaction = jest.fn();
 
 jest.mock('../../../shared/config/stripeConfig', () => ({
-  stripe: { charges: { retrieve: mockRetrieveCharge } },
+  stripe: {
+    charges: { retrieve: mockRetrieveCharge },
+    balanceTransactions: { retrieve: mockRetrieveBalanceTransaction },
+  },
 }));
 
 jest.mock('../repositories/PaymentRecordRepository', () => ({
@@ -58,6 +62,11 @@ describe('StripeWebhookService', () => {
       balance_transaction: 'txn_123',
       created: 1_790_999_990,
     });
+    mockRetrieveBalanceTransaction.mockResolvedValue({
+      id: 'txn_123',
+      currency: 'gbp',
+      fee: 95,
+    });
     jest.spyOn(console, 'warn').mockImplementation(() => undefined);
   });
 
@@ -87,6 +96,9 @@ describe('StripeWebhookService', () => {
       productAmount: 2500,
       shippingFee: 399,
       securityFee: 250,
+      charityProceeds: 2500,
+      stripeFee: 95,
+      cherryRevenue: 155,
       stripeChargeId: 'ch_123',
       stripeBalanceTransactionId: 'txn_123',
       paidAt: new Date(1_790_999_990 * 1000),
@@ -166,7 +178,11 @@ describe('StripeWebhookService', () => {
       succeededEvent({
         latest_charge: {
           id: 'ch_9',
-          balance_transaction: { id: 'txn_9' },
+          balance_transaction: {
+            id: 'txn_9',
+            currency: 'gbp',
+            fee: 80,
+          },
           created: 1_790_000_000,
         },
       }),

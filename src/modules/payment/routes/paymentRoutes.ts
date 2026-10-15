@@ -168,7 +168,7 @@ const router = Router();
  *                       description: Shipping fee in GBP pence
  *                     securityFee:
  *                       type: integer
- *                       description: 10% purchase security fee in GBP pence
+ *                       description: Purchase security fee in GBP pence (10% of item price, minimum 100p)
  *                     totalAmount:
  *                       type: integer
  *                       description: Total Stripe charge in GBP pence

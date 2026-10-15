@@ -43,16 +43,35 @@ export class PaymentRecordRepository {
         input.stripeBalanceTransactionId ??
         existing?.stripeBalanceTransactionId ??
         null;
+      const stripeFee = input.stripeFee ?? existing?.stripeFee ?? null;
+      const cherryRevenue =
+        stripeFee === null || input.securityFee === null
+          ? (existing?.cherryRevenue ?? null)
+          : input.securityFee - stripeFee;
+      const orderRef = orderId
+        ? firestore.collection('orders').doc(orderId)
+        : null;
+      const orderDoc = orderRef ? await transaction.get(orderRef) : null;
 
       const now = new Date();
       transaction.set(paymentRef, {
         ...input,
         stripeChargeId,
         stripeBalanceTransactionId,
+        stripeFee,
+        cherryRevenue,
         orderId,
         firstReceivedAt: existing?.firstReceivedAt ?? now,
         updatedAt: now,
       });
+
+      if (input.status === 'paid' && orderRef && orderDoc?.exists) {
+        transaction.update(orderRef, {
+          charityProceeds: input.charityProceeds,
+          stripeFee,
+          cherryRevenue,
+        });
+      }
 
       return { orderId, keptExistingPaid: false };
     });
