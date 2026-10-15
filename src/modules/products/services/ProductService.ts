@@ -1,9 +1,7 @@
 import { parseListingEdit } from '../validators/productValidator';
 import {
   assertOwner,
-  assertSafetyVerified,
   ListingSafetyError,
-  listingEditingEnabled,
 } from '../../../shared/utils/listingSafety';
 import { Product, ProductStatus } from '../model/Product';
 import { Category } from '../../categories/model/Category';
@@ -294,12 +292,6 @@ export class ProductService {
     data: UpdateProductData,
     uid: string,
   ): Promise<Product> {
-    if (!listingEditingEnabled())
-      throw new ListingSafetyError(
-        503,
-        'LISTING_EDIT_DISABLED',
-        'Listing editing is not available yet.',
-      );
     const validated = parseListingEdit(data);
     const existing = await this.productRepo.getById(id);
     if (!existing)
@@ -309,13 +301,6 @@ export class ProductService {
         'Listing not found.',
       );
     assertOwner(existing, uid);
-    assertSafetyVerified(existing);
-    if (existing.editVersion !== validated.expectedEditVersion)
-      throw new ListingSafetyError(
-        409,
-        'LISTING_VERSION_CONFLICT',
-        'This listing has changed. Reload it before saving.',
-      );
     return this.productRepo.update(id, validated, uid);
   }
 
@@ -764,7 +749,6 @@ export interface CreateProductData {
 }
 
 export interface UpdateProductData {
-  expectedEditVersion: number;
   name?: string;
   description?: string;
   categoryId?: string;

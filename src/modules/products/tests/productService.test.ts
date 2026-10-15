@@ -579,7 +579,6 @@ describe('ProductService pagination', () => {
   });
 
   it('rejects stock changes through the descriptive edit service', async () => {
-    process.env.LISTING_EDIT_ENABLED = 'true';
     const service = new ProductService(
       {} as any,
       productLikeRepo,
@@ -590,11 +589,10 @@ describe('ProductService pagination', () => {
     await expect(
       service.updateProduct(
         'product-1',
-        { number: 0, expectedEditVersion: 0 } as any,
+        { number: 0 } as any,
         'user-1',
       ),
     ).rejects.toMatchObject({ code: 'LISTING_VALIDATION_FAILED' });
-    delete process.env.LISTING_EDIT_ENABLED;
   });
 
   it.each(['active', 'unlisted'] as const)(
