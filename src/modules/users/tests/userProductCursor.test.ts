@@ -137,11 +137,12 @@ describe('UserProductCursor', () => {
   });
 
   it.each([undefined, '', 'not-a-secret', Buffer.alloc(16).toString('base64')])(
-    'fails operationally when the deployment key is missing or invalid',
+    'fails operationally when a cursor token needs a missing or invalid key',
     (secret) => {
+      const token = codec().encode(position, 'seller', 'viewer');
       expect(() =>
         new UserProductCursor(() => secret).decode(
-          undefined,
+          token,
           'seller',
           'viewer',
         ),
@@ -151,5 +152,12 @@ describe('UserProductCursor', () => {
 
   it('accepts the first page without a token', () => {
     expect(codec().decode(undefined, 'seller', 'viewer')).toBeUndefined();
+    expect(
+      new UserProductCursor(() => undefined).decode(
+        undefined,
+        'seller',
+        'viewer',
+      ),
+    ).toBeUndefined();
   });
 });
