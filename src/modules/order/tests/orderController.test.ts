@@ -8,8 +8,8 @@ const mockGetOrderById = jest.fn();
 const mockGetShipmentByOrderId = jest.fn();
 const mockSendSellerLabelEmail = jest.fn();
 const mockSendBuyerShipmentStartedEmail = jest.fn();
-const mockEnqueueFulfillment = jest.fn();
 const mockProcessPaidOrder = jest.fn();
+const mockRefundUnavailablePayment = jest.fn();
 
 jest.mock('../../auth/repositories/UserRepository', () => ({
   UserRepository: jest.fn().mockImplementation(() => ({
@@ -25,6 +25,16 @@ jest.mock('../repositories/OrderRepository', () => ({
     getOrderById: mockGetOrderById,
   })),
   FulfillmentJobBusyError: class FulfillmentJobBusyError extends Error {},
+  PaymentOrderMismatchError: class PaymentOrderMismatchError extends Error {
+    constructor() {
+      super('Pending order does not match verified payment');
+    }
+  },
+  PendingOrderUnavailableError: class PendingOrderUnavailableError extends Error {
+    constructor(public readonly reason: string) {
+      super(reason);
+    }
+  },
 }));
 
 jest.mock('../../../disputes/DisputeRepository', () => ({
@@ -37,18 +47,13 @@ jest.mock('../../payment/services/PaymentService', () => ({
   PaymentService: jest.fn().mockImplementation(() => ({
     verifySucceededPaymentIntentForUser:
       mockVerifySucceededPaymentIntentForUser,
+    refundUnavailablePayment: mockRefundUnavailablePayment,
   })),
 }));
 
 jest.mock('../../shipping/repositories/ShipmentRepository', () => ({
   ShipmentRepository: jest.fn().mockImplementation(() => ({
     getShipmentByOrderId: mockGetShipmentByOrderId,
-  })),
-}));
-
-jest.mock('../services/FulfillmentTaskQueue', () => ({
-  FulfillmentTaskQueue: jest.fn().mockImplementation(() => ({
-    enqueue: mockEnqueueFulfillment,
   })),
 }));
 
@@ -179,7 +184,7 @@ describe('orderController.createOrder', () => {
       ...payload,
       createdAt: new Date(),
     });
-    mockEnqueueFulfillment.mockResolvedValue(undefined);
+    mockRefundUnavailablePayment.mockResolvedValue(undefined);
     mockProcessPaidOrder.mockResolvedValue({
       shipment: {
         id: 'shipment-1',
@@ -202,7 +207,7 @@ describe('orderController.createOrder', () => {
     });
   });
 
-  it('enqueues and processes fulfillment after payment finalization', async () => {
+  it('processes fulfillment directly after payment finalization', async () => {
     const req: any = {
       user: {
         uid: 'user-1',
@@ -221,9 +226,12 @@ describe('orderController.createOrder', () => {
     expect(mockFinalizePendingOrder).toHaveBeenCalledWith(
       'order-1',
       'pi_123',
-      'user-1',
+      expect.objectContaining({
+        userId: 'user-1',
+        totalAmount: 2599,
+        pickupPointId: '999',
+      }),
     );
-    expect(mockEnqueueFulfillment).toHaveBeenCalledWith('order-1');
     expect(mockProcessPaidOrder).toHaveBeenCalledWith('order-1');
     expect(res.status).toHaveBeenCalledWith(200);
   });
@@ -243,26 +251,6 @@ describe('orderController.createOrder', () => {
     await createOrder(req, res);
 
     expect(res.status).toHaveBeenCalledWith(202);
-    expect(mockEnqueueFulfillment).toHaveBeenCalledWith('order-1');
-  });
-
-  it('does not finalize when fulfillment dispatch cannot be enqueued', async () => {
-    mockEnqueueFulfillment.mockRejectedValue(
-      new Error('Cloud Tasks unavailable'),
-    );
-
-    const req: any = {
-      user: {
-        uid: 'user-1',
-      },
-      body: { orderId: 'order-1', paymentIntentId: 'pi_123' },
-    };
-    const res = createResponse();
-
-    await createOrder(req, res);
-
-    expect(res.status).toHaveBeenCalledWith(500);
-    expect(mockProcessPaidOrder).not.toHaveBeenCalled();
   });
 
   it('returns 400 when payment verification fails', async () => {
@@ -284,27 +272,13 @@ describe('orderController.createOrder', () => {
     expect(res.status).toHaveBeenCalledWith(400);
   });
 
-  it('returns 400 when the pending order differs from the paid checkout', async () => {
-    mockVerifySucceededPaymentIntentForUser.mockResolvedValue({
-      paymentIntentId: 'pi_123',
-      firebaseUid: 'user-1',
-      orderId: 'order-1',
-      sellerId: 'seller-1',
-      charityId: 'charity-1',
-      productId: 'product-1',
-      shippingMethodId: '12345',
-      shippingMethodName: 'InPost locker',
-      pickupPointId: 'different-pickup-point',
-      destinationCountry: 'GB',
-      destinationPostalCode: 'SW1A 1AA',
-      shippingCarrier: 'inpost_gb',
-      shippingWeight: 2000,
-      productAmount: 2000,
-      shippingFee: 399,
-      securityFee: 200,
-      totalAmount: 2599,
-      currency: 'GBP',
-    });
+  it('refunds when the pending order differs from the paid checkout', async () => {
+    const { PaymentOrderMismatchError } = jest.requireMock(
+      '../repositories/OrderRepository',
+    );
+    mockFinalizePendingOrder.mockRejectedValue(
+      new PaymentOrderMismatchError(),
+    );
 
     const req: any = {
       user: {
@@ -316,8 +290,37 @@ describe('orderController.createOrder', () => {
 
     await createOrder(req, res);
 
-    expect(mockFinalizePendingOrder).not.toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(400);
+    expect(mockFinalizePendingOrder).toHaveBeenCalled();
+    expect(mockRefundUnavailablePayment).toHaveBeenCalledWith(
+      'order-1',
+      'pi_123',
+    );
+    expect(res.status).toHaveBeenCalledWith(409);
+  });
+
+  it('refunds an expired successful payment and returns a conflict', async () => {
+    const { PendingOrderUnavailableError } = jest.requireMock(
+      '../repositories/OrderRepository',
+    );
+    mockFinalizePendingOrder.mockRejectedValue(
+      new PendingOrderUnavailableError('expired'),
+    );
+    const req: any = {
+      user: { uid: 'user-1' },
+      body: { orderId: 'order-1', paymentIntentId: 'pi_123' },
+    };
+    const res = createResponse();
+
+    await createOrder(req, res);
+
+    expect(mockRefundUnavailablePayment).toHaveBeenCalledWith(
+      'order-1',
+      'pi_123',
+    );
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'PAYMENT_REFUNDED' }),
+    );
   });
 
   it('returns 404 when the pending order no longer exists', async () => {

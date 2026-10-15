@@ -8,7 +8,8 @@ const mockCreatePendingOrder = jest.fn();
 const mockAttachPaymentIntent = jest.fn();
 const mockReleasePendingOrder = jest.fn();
 const mockFinalizePendingOrder = jest.fn();
-const mockEnqueueFulfillment = jest.fn();
+const mockMarkPaymentRefunded = jest.fn();
+const mockProcessPaidOrder = jest.fn();
 
 jest.mock('../PaymentRepository', () => ({
   PaymentRepository: jest.fn().mockImplementation(() => ({
@@ -62,8 +63,15 @@ jest.mock('../../order/repositories/OrderRepository', () => ({
     attachPaymentIntent: mockAttachPaymentIntent,
     releasePendingOrder: mockReleasePendingOrder,
     finalizePendingOrder: mockFinalizePendingOrder,
+    markPaymentRefunded: mockMarkPaymentRefunded,
   })),
-  PendingOrderUnavailableError: class PendingOrderUnavailableError extends Error {},
+  PendingOrderUnavailableError: class PendingOrderUnavailableError extends Error {
+    constructor(public readonly reason: string) {
+      super(reason);
+    }
+  },
+  PaymentOrderMismatchError: class PaymentOrderMismatchError extends Error {},
+  FulfillmentJobBusyError: class FulfillmentJobBusyError extends Error {},
 }));
 
 jest.mock('../../../shared/config/sendcloudConfig', () => ({
@@ -72,9 +80,9 @@ jest.mock('../../../shared/config/sendcloudConfig', () => ({
   },
 }));
 
-jest.mock('../../order/services/FulfillmentTaskQueue', () => ({
-  FulfillmentTaskQueue: jest.fn().mockImplementation(() => ({
-    enqueue: mockEnqueueFulfillment,
+jest.mock('../../order/services/OrderFulfillmentService', () => ({
+  OrderFulfillmentService: jest.fn().mockImplementation(() => ({
+    processPaidOrder: mockProcessPaidOrder,
   })),
 }));
 
@@ -116,7 +124,8 @@ describe('PaymentService', () => {
     mockAttachPaymentIntent.mockResolvedValue(undefined);
     mockReleasePendingOrder.mockResolvedValue(undefined);
     mockFinalizePendingOrder.mockResolvedValue(undefined);
-    mockEnqueueFulfillment.mockResolvedValue(undefined);
+    mockMarkPaymentRefunded.mockResolvedValue(undefined);
+    mockProcessPaidOrder.mockResolvedValue({ completed: true });
   });
 
   it('calculates the total from trusted product and shipping data', async () => {
@@ -264,9 +273,13 @@ describe('PaymentService', () => {
     expect(mockFinalizePendingOrder).toHaveBeenCalledWith(
       'order-1',
       'pi_123',
-      'user-1',
+      expect.objectContaining({
+        userId: 'user-1',
+        totalAmount: 3149,
+        pickupPointId: '13127548',
+      }),
     );
-    expect(mockEnqueueFulfillment).toHaveBeenCalledWith('order-1');
+    expect(mockProcessPaidOrder).toHaveBeenCalledWith('order-1');
   });
 
   it('releases the reserved stock after a canceled PaymentIntent', async () => {
@@ -318,5 +331,10 @@ describe('PaymentService', () => {
       { payment_intent: 'pi_123' },
       { idempotencyKey: 'late-checkout-refund-pi_123' },
     );
+    expect(mockMarkPaymentRefunded).toHaveBeenCalledWith(
+      'order-1',
+      'pi_123',
+    );
+    expect(mockProcessPaidOrder).not.toHaveBeenCalled();
   });
 });

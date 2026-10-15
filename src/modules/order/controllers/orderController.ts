@@ -4,6 +4,8 @@ import { UserRepository } from '../../auth/repositories/UserRepository';
 import {
   FulfillmentJobBusyError,
   OrderRepository,
+  PaymentOrderMismatchError,
+  PendingOrderUnavailableError,
 } from '../repositories/OrderRepository';
 import { PaymentService } from '../../payment/services/PaymentService';
 import { ShipmentRepository } from '../../shipping/repositories/ShipmentRepository';
@@ -12,7 +14,6 @@ import { Order, OrderDisputeReason } from '../model/Order';
 import { requireSingleParam } from '../../../shared/utils/requestParam';
 import { DisputeRepository } from '../../../disputes/DisputeRepository';
 import { DisputeSubmissionError } from '../../../disputes/Dispute';
-import { FulfillmentTaskQueue } from '../services/FulfillmentTaskQueue';
 import { OrderFulfillmentService } from '../services/OrderFulfillmentService';
 
 const getDeliveryState = (
@@ -234,37 +235,53 @@ export const createOrder = async (
       return;
     }
 
-    if (
-      pendingOrder.userId !== firebaseUid ||
-      pendingOrder.paymentIntentId !== paymentIntentId ||
-      pendingOrder.sellerId !== verifiedPayment.sellerId ||
-      pendingOrder.charityId !== verifiedPayment.charityId ||
-      pendingOrder.productId !== verifiedPayment.productId ||
-      pendingOrder.productAmount !== verifiedPayment.productAmount ||
-      pendingOrder.shippingFee !== verifiedPayment.shippingFee ||
-      pendingOrder.securityFee !== verifiedPayment.securityFee ||
-      pendingOrder.totalAmount !== verifiedPayment.totalAmount ||
-      pendingOrder.shippingOptionId !== verifiedPayment.shippingMethodId ||
-      pendingOrder.shippingWeight !== verifiedPayment.shippingWeight ||
-      pendingOrder.shippingCarrier !== verifiedPayment.shippingCarrier ||
-      pendingOrder.pickupPoint.id !== verifiedPayment.pickupPointId
-    ) {
-      ResponseHandler.badRequest(
-        res,
-        'Pending order does not match payment',
-        'The stored order details differ from the verified payment',
-      );
-      return;
-    }
-
     let savedOrder;
     try {
       savedOrder = await orderRepo.finalizePendingOrder(
         orderId,
         paymentIntentId,
-        firebaseUid,
+        {
+          userId: verifiedPayment.firebaseUid,
+          sellerId: verifiedPayment.sellerId,
+          charityId: verifiedPayment.charityId,
+          productId: verifiedPayment.productId,
+          shippingMethodId: verifiedPayment.shippingMethodId,
+          shippingMethodName: verifiedPayment.shippingMethodName,
+          pickupPointId: verifiedPayment.pickupPointId,
+          destinationCountry: verifiedPayment.destinationCountry,
+          destinationPostalCode: verifiedPayment.destinationPostalCode,
+          shippingCarrier: verifiedPayment.shippingCarrier,
+          shippingWeight: verifiedPayment.shippingWeight,
+          productAmount: verifiedPayment.productAmount,
+          shippingFee: verifiedPayment.shippingFee,
+          securityFee: verifiedPayment.securityFee,
+          totalAmount: verifiedPayment.totalAmount,
+          currency: verifiedPayment.currency,
+        },
       );
     } catch (err) {
+      if (err instanceof PaymentOrderMismatchError) {
+        await paymentService.refundUnavailablePayment(orderId, paymentIntentId);
+        res.status(409).json({
+          success: false,
+          code: 'PAYMENT_REFUNDED',
+          message: 'Order verification failed; the payment has been refunded',
+          data: { orderId, paymentStatus: 'refunded' },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+      if (err instanceof PendingOrderUnavailableError) {
+        await paymentService.refundUnavailablePayment(orderId, paymentIntentId);
+        res.status(409).json({
+          success: false,
+          code: 'PAYMENT_REFUNDED',
+          message: 'Checkout expired; the payment has been refunded',
+          data: { orderId, paymentStatus: 'refunded' },
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
       if (
         err instanceof Error &&
         err.message === 'PaymentIntent has already been used'
@@ -292,8 +309,6 @@ export const createOrder = async (
       throw err;
     }
 
-    const fulfillmentQueue = new FulfillmentTaskQueue();
-    await fulfillmentQueue.enqueue(savedOrder.id);
     try {
       const fulfillment =
         await new OrderFulfillmentService().processPaidOrder(savedOrder.id);
@@ -322,7 +337,7 @@ export const createOrder = async (
         res,
         202,
         true,
-        'Order paid; fulfillment is queued for retry',
+        'Order paid; fulfillment is pending retry',
         {
           orderId: savedOrder.id,
           fulfillmentStatus: 'pending',

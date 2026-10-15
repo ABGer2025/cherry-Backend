@@ -67,7 +67,7 @@ export interface Order {
   };
   pickupPoint: PickupPointSelection;
   paymentIntentId?: string;
-  paymentStatus: 'pending' | 'succeeded' | 'failed' | 'cancelled';
+  paymentStatus: 'pending' | 'succeeded' | 'failed' | 'cancelled' | 'refunded';
   status:
     | 'pending_payment'
     | 'expired'
@@ -83,6 +83,7 @@ export interface Order {
   paymentExpiresAt?: Date;
   reservationActive?: boolean;
   paidAt?: Date;
+  refundedAt?: Date;
   updatedAt?: Date;
   buyerConfirmedReceived?: boolean;
   buyerConfirmedReceivedAt?: Date;

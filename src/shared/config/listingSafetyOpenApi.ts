@@ -34,8 +34,7 @@ export const listingSafetySchemas = {
         maxItems: 10,
         uniqueItems: true,
         items: { type: 'string', format: 'uri' },
-        description:
-          'Ordered approved Storage URLs. First photo is the main image. Each immutable object must be a verified JPEG, PNG or WebP, at most 10 MiB and 40 million pixels. No animated images.',
+        description: 'Ordered image URLs. First photo is the main image.',
       },
     },
   },
@@ -61,7 +60,7 @@ const response = (description: string) => ({
 });
 export const listingSafetyResponses = {
   ListingValidationError: response(
-    'LISTING_VALIDATION_FAILED, LISTING_INVALID_CATEGORY or LISTING_INVALID_MEDIA. No changes committed.',
+    'LISTING_VALIDATION_FAILED or LISTING_INVALID_CATEGORY. No changes committed.',
   ),
   ListingAuthenticationError: {
     description: 'A valid Firebase ID token is required. Uses the existing authentication error envelope (success, message, error, timestamp).',
@@ -74,6 +73,6 @@ export const listingSafetyResponses = {
     'LISTING_VERSION_CONFLICT, LISTING_VERSION_REQUIRED, LISTING_VERSION_UNAVAILABLE, LISTING_SAFETY_REVIEW_REQUIRED, LISTING_PAYMENT_PENDING, LISTING_HAS_SALES, LISTING_NOT_EDITABLE, LISTING_NOT_AVAILABLE, CHECKOUT_EXPIRED, CHECKOUT_FINISHED, PAYMENT_STILL_ACTIONABLE, PAYMENT_RECONCILIATION_REQUIRED or ACCOUNT_DELETION_PENDING. Refresh or seek support as appropriate; never retry an edit silently.',
   ),
   ListingDisabledError: response(
-    'LISTING_EDIT_DISABLED or LISTING_MEDIA_NOT_READY. Deployment prerequisites are incomplete.',
+    'LISTING_EDIT_DISABLED. Deployment prerequisites are incomplete.',
   ),
 };

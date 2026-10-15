@@ -1,6 +1,6 @@
 {
   "score": 2,
-  "summary": "Protected listing and payment writes and immutable media rules passed local emulator checks. Production deployment is blocked by unverified live rules/IAM and known frontend compatibility work; these listing-only emulator fixtures are not production policies.",
+  "summary": "Protected listing and payment writes passed local emulator checks. Production deployment is blocked by unverified live rules/IAM and known frontend compatibility work; these listing-only emulator fixtures are not production policies.",
   "findings": [
     {
       "check": "Business Logic vs. Rules",
@@ -11,8 +11,8 @@
     {
       "check": "Authority Source",
       "severity": "major",
-      "issue": "Previously permissive rules and live storage ownership are unverified.",
-      "recommendation": "Verify deployed rules and IAM, set an audited media policy start time, and certify legacy photos from server-owned generation-specific provenance only."
+      "issue": "Previously permissive live rules and IAM are unverified.",
+      "recommendation": "Verify deployed rules and IAM before enabling listing edits."
     }
   ]
 }

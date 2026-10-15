@@ -7,7 +7,6 @@ dotenv.config({ path: '.env' });
 import swaggerUi from 'swagger-ui-express';
 import { swaggerSpecs } from './shared/config/swaggerConfig';
 import { stripeWebhook } from './modules/payment/controllers/paymentController';
-import fulfillmentTaskRoutes from './modules/order/routes/fulfillmentTaskRoutes';
 
 // Initialize Firebase
 import './shared/config/firebaseConfig';
@@ -23,8 +22,6 @@ app.use(express.json({
         (req as any).rawBody = Buffer.from(buffer);
     },
 }));
-app.use('/api/internal/fulfillment', fulfillmentTaskRoutes);
-
 import productRoutes from './modules/products/routes/productRoutes';
 import categoryRoutes from './modules/categories/routes/categoryRoutes';
 import charityRoutes from './modules/charities/routes/charityRoutes';

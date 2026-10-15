@@ -1,4 +1,3 @@
-import { ListingMediaService } from './ListingMediaService';
 import { parseListingEdit } from '../validators/productValidator';
 import {
   assertOwner,
@@ -33,7 +32,6 @@ export class ProductService {
     private categoryRepo: CategoryRepository,
     private charityRepo: CharityRepository,
     private postageSizeRepo: PostageSizeRepository,
-    private listingMediaService = new ListingMediaService(),
   ) {}
 
   async getAllProducts(): Promise<Product[]> {
@@ -166,12 +164,6 @@ export class ProductService {
       data.charityId,
       data.postageSize,
     );
-    await this.listingMediaService.validate(
-      data.userId,
-      data.product_images,
-      [],
-    );
-
     const product: Product = {
       ...data,
       likes: data.likes || 0,
@@ -324,13 +316,6 @@ export class ProductService {
         'LISTING_VERSION_CONFLICT',
         'This listing has changed. Reload it before saving.',
       );
-    // Storage objects are immutable under the prerequisite rules. The transaction
-    // rechecks the version, so the retained set cannot change during validation.
-    await new ListingMediaService().validate(
-      uid,
-      validated.product_images ?? existing.product_images,
-      existing.product_images,
-    );
     return this.productRepo.update(id, validated, uid);
   }
 

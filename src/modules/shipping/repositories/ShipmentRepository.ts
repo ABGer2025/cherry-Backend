@@ -10,16 +10,30 @@ export class ShipmentRepository {
   /**
    * Create a new shipment in Firestore
    * @param shipmentData - Shipment data without ID
-   * @returns Created shipment with generated ID
+   * @returns Created shipment with the order ID as its stable ID
    */
   async createShipment(shipmentData: Omit<Shipment, 'id'>): Promise<Shipment> {
-    const docRef = await firestore.collection(this.collection).add({
+    const docRef = firestore.collection(this.collection).doc(shipmentData.orderId);
+    const storedShipment = {
       ...shipmentData,
       createdAt: new Date(),
       updatedAt: new Date(),
-    });
+    };
 
-    return { id: docRef.id, ...shipmentData };
+    try {
+      await docRef.create(storedShipment);
+    } catch (error: any) {
+      if (error?.code !== 6 && error?.code !== 'already-exists') {
+        throw error;
+      }
+      const existing = await this.getShipmentByOrderId(shipmentData.orderId);
+      if (existing) {
+        return existing;
+      }
+      throw error;
+    }
+
+    return { id: docRef.id, ...storedShipment };
   }
 
   /**
@@ -44,6 +58,14 @@ export class ShipmentRepository {
    * @returns Shipment or null if not found
    */
   async getShipmentByOrderId(orderId: string): Promise<Shipment | null> {
+    const directDoc = await firestore
+      .collection(this.collection)
+      .doc(orderId)
+      .get();
+    if (directDoc.exists) {
+      return this.mapToShipment(directDoc.id, directDoc.data());
+    }
+
     const snapshot = await firestore
       .collection(this.collection)
       .where('orderId', '==', orderId)

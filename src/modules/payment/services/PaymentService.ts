@@ -9,10 +9,11 @@ import { gbpToPence } from '../../../shared/utils/money';
 import { calculateSecurityFeePence } from '../../../shared/config/checkoutConfig';
 import {
   OrderRepository,
+  PaymentOrderMismatchError,
   PendingOrderUnavailableError,
 } from '../../order/repositories/OrderRepository';
 import { Order } from '../../order/model/Order';
-import { FulfillmentTaskQueue } from '../../order/services/FulfillmentTaskQueue';
+import { OrderFulfillmentService } from '../../order/services/OrderFulfillmentService';
 
 export interface CreatePaymentSelection {
   productId: string;
@@ -52,7 +53,7 @@ export class PaymentService {
   private postageSizeRepo = new PostageSizeRepository();
   private shippingService = new CheckoutShippingService();
   private orderRepo = new OrderRepository();
-  private fulfillmentTaskQueue = new FulfillmentTaskQueue();
+  private orderFulfillmentService = new OrderFulfillmentService();
 
   async createPaymentIntentForUserByUid(
     firebaseUid: string,
@@ -280,21 +281,37 @@ export class PaymentService {
       await this.orderRepo.finalizePendingOrder(
         verifiedPayment.orderId,
         paymentIntentId,
-        firebaseUid,
+        this.toVerifiedOrderPayment(verifiedPayment),
       );
     } catch (error) {
-      if (!(error instanceof PendingOrderUnavailableError)) {
+      if (
+        !(error instanceof PendingOrderUnavailableError) &&
+        !(error instanceof PaymentOrderMismatchError)
+      ) {
         throw error;
       }
 
-      await stripe.refunds.create(
-        { payment_intent: paymentIntentId },
-        { idempotencyKey: `late-checkout-refund-${paymentIntentId}` },
+      await this.refundUnavailablePayment(
+        verifiedPayment.orderId,
+        paymentIntentId,
       );
       return;
     }
 
-    await this.fulfillmentTaskQueue.enqueue(verifiedPayment.orderId);
+    await this.orderFulfillmentService.processPaidOrder(
+      verifiedPayment.orderId,
+    );
+  }
+
+  async refundUnavailablePayment(
+    orderId: string,
+    paymentIntentId: string,
+  ): Promise<void> {
+    await stripe.refunds.create(
+      { payment_intent: paymentIntentId },
+      { idempotencyKey: `late-checkout-refund-${paymentIntentId}` },
+    );
+    await this.orderRepo.markPaymentRefunded(orderId, paymentIntentId);
   }
 
   async handleCanceledPaymentIntent(
@@ -317,5 +334,26 @@ export class PaymentService {
 
   private normalizePostalCode(postalCode: string): string {
     return postalCode.replace(/\s/g, '').toUpperCase();
+  }
+
+  private toVerifiedOrderPayment(payment: VerifiedCheckoutPayment) {
+    return {
+      userId: payment.firebaseUid,
+      sellerId: payment.sellerId,
+      charityId: payment.charityId,
+      productId: payment.productId,
+      shippingMethodId: payment.shippingMethodId,
+      shippingMethodName: payment.shippingMethodName,
+      pickupPointId: payment.pickupPointId,
+      destinationCountry: payment.destinationCountry,
+      destinationPostalCode: payment.destinationPostalCode,
+      shippingCarrier: payment.shippingCarrier,
+      shippingWeight: payment.shippingWeight,
+      productAmount: payment.productAmount,
+      shippingFee: payment.shippingFee,
+      securityFee: payment.securityFee,
+      totalAmount: payment.totalAmount,
+      currency: payment.currency,
+    };
   }
 }

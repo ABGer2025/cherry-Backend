@@ -75,12 +75,6 @@ Important vars for local work:
 - `RESEND_API_KEY`
 - `RESEND_FROM_EMAIL`
 - `FIREBASE_PROJECT_ID`
-- `CLOUD_TASKS_PROJECT_ID` (or `FIREBASE_PROJECT_ID`)
-- `CLOUD_TASKS_LOCATION`
-- `CLOUD_TASKS_QUEUE`
-- `FULFILLMENT_WORKER_URL`
-- `FULFILLMENT_WORKER_AUDIENCE`
-- `FULFILLMENT_WORKER_SERVICE_ACCOUNT`
 
 Recommended defaults:
 
@@ -89,15 +83,7 @@ Recommended defaults:
 - Use `SENDCLOUD_LABEL_MODE=test` in development and `SENDCLOUD_LABEL_MODE=live` in production when real labels should be generated
 - Keep `EMAIL_MODE=off` unless you are intentionally sending email through Resend
 - Only use live Sendcloud credentials when you are deliberately testing the live shipping integration
-- Configure a Cloud Tasks queue and worker service account before enabling paid checkout. The backend runtime identity needs permission to enqueue tasks and to mint OIDC tokens for the configured worker service account. The worker service account must match `FULFILLMENT_WORKER_SERVICE_ACCOUNT`; the `/api/internal/fulfillment/tasks` endpoint validates its OIDC identity and audience.
-- Configure Cloud Tasks retry limits and dispatch deadlines for the queue. Fulfillment jobs are persisted transactionally with paid-order finalization, so failed deliveries remain available for task retries.
-
-### Cloud Tasks fulfillment setup
-
-1. Enable the Cloud Tasks API and create the queue named by `CLOUD_TASKS_QUEUE` in `CLOUD_TASKS_LOCATION`.
-2. Give the backend runtime service account permission to create tasks and to attach OIDC tokens for `FULFILLMENT_WORKER_SERVICE_ACCOUNT`.
-3. Set `FULFILLMENT_WORKER_URL` to the deployed `/api/internal/fulfillment/tasks` endpoint and set `FULFILLMENT_WORKER_AUDIENCE` to the audience accepted by that service.
-4. Configure queue retry limits and a dispatch deadline long enough for Sendcloud and email operations. The worker uses a Firestore lease to prevent concurrent processing of the same order.
+- Fulfillment runs synchronously after payment confirmation. A Firestore fulfillment job records progress so webhook or client retries can resume safely.
 
 See `.env.example` for the full template.
 

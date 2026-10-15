@@ -53,6 +53,15 @@ describe('OrderRepository.finalizePendingOrder', () => {
     paymentExpiresAt: new Date(Date.now() + 60_000),
     createdAt: new Date(),
   };
+  const verifiedPayment = {
+    userId: 'buyer-1', sellerId: 'seller-1', charityId: 'charity-1',
+    productId: 'product-1', shippingMethodId: '3747',
+    shippingMethodName: 'InPost locker', pickupPointId: '999',
+    destinationCountry: 'GB', destinationPostalCode: 'SW1A 1AA',
+    shippingCarrier: 'inpost_gb', shippingWeight: 2000,
+    productAmount: 2500, shippingFee: 399, securityFee: 250,
+    totalAmount: 3149, currency: 'GBP' as const,
+  };
 
   let refs: Map<string, { collection: string; id: string }>;
   let transaction: {
@@ -113,7 +122,7 @@ describe('OrderRepository.finalizePendingOrder', () => {
     const result = await new OrderRepository().finalizePendingOrder(
       'order-1',
       'pi_123',
-      'buyer-1',
+      verifiedPayment,
     );
 
     const jobRef = refs.get('order_fulfillment_jobs/order-1');
@@ -158,11 +167,31 @@ describe('OrderRepository.finalizePendingOrder', () => {
     const result = await new OrderRepository().finalizePendingOrder(
       'order-1',
       'pi_123',
-      'buyer-1',
+      verifiedPayment,
     );
 
     expect(result.status).toBe('paid');
     expect(transaction.create).not.toHaveBeenCalled();
     expect(transaction.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects changed order values inside the transaction', async () => {
+    await expect(
+      new OrderRepository().finalizePendingOrder('order-1', 'pi_123', {
+        ...verifiedPayment,
+        totalAmount: 9999,
+      }),
+    ).rejects.toThrow('Pending order does not match verified payment');
+
+    expect(transaction.update).toHaveBeenCalledWith(
+      refs.get('orders/order-1'),
+      expect.objectContaining({
+        paymentIntentId: 'pi_123',
+        paymentStatus: 'failed',
+        status: 'failed',
+        reservationActive: false,
+      }),
+    );
+    expect(transaction.set).not.toHaveBeenCalled();
   });
 });

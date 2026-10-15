@@ -10,7 +10,6 @@ module.exports = {
   },
   testPathIgnorePatterns: [
     "/node_modules/",
-    "\\.integration\\.test\\.ts$",
     "/dist/",
     "src/modules/order/tests/exportRoutes.test.ts",
     "src/modules/products/tests/productRoutes.test.ts",

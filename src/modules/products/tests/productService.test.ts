@@ -515,7 +515,6 @@ describe('ProductService pagination', () => {
       categoryRepo,
       charityRepo,
       postageSizeRepo,
-      { validate: jest.fn().mockResolvedValue(undefined) } as any,
     );
 
     const result = await service.createProduct({
@@ -555,7 +554,6 @@ describe('ProductService pagination', () => {
       categoryRepo,
       charityRepo,
       postageSizeRepo,
-      { validate: jest.fn().mockResolvedValue(undefined) } as any,
     );
 
     const result = await service.createProduct({

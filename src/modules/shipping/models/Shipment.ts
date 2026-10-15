@@ -39,6 +39,7 @@ export interface Shipment {
 
 export interface SendcloudParcel {
   id: number;
+  order_number?: string;
   tracking_number?: string;
   tracking_url?: string;
   status?: {
