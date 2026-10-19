@@ -312,22 +312,34 @@ export class ProductService {
         'Listing not found.',
       );
     assertOwner(existing, uid);
-    return this.productRepo.update(id, validated, uid);
+    const updated = await this.productRepo.update(id, validated, uid);
+    if (validated.product_images) {
+      const retainedImages = new Set(validated.product_images);
+      const removedImages = existing.product_images.filter(
+        (image) => !retainedImages.has(image),
+      );
+      await this.deleteProductMedia(id, removedImages, uid);
+    }
+    return updated;
   }
 
   async deleteProduct(id: string, uid: string): Promise<boolean> {
     const product = await this.productRepo.getById(id);
     await this.productRepo.changeAvailability(id, uid, 'delete');
     if (product) {
-      await this.deleteProductMedia(product, uid);
+      await this.deleteProductMedia(id, product.product_images, uid);
     }
     return true;
   }
 
-  private async deleteProductMedia(product: Product, uid: string): Promise<void> {
+  private async deleteProductMedia(
+    productId: string,
+    imageUrls: string[],
+    uid: string,
+  ): Promise<void> {
     const configuredBucket = this.mediaBucket;
     const paths = [...new Set(
-      product.product_images
+      imageUrls
         .map((url) => this.storagePathForOwnedMedia(url, uid, configuredBucket?.name))
         .filter((path): path is string => path !== null),
     )];
@@ -341,7 +353,7 @@ export class ProductService {
     const failures = results.filter((result) => result.status === 'rejected');
     if (failures.length > 0) {
       console.error('Product media cleanup failed', {
-        productId: product.id,
+        productId,
         failedFiles: failures.length,
         totalFiles: paths.length,
       });
