@@ -1,5 +1,6 @@
 import {
   assertOwner,
+  assertOwnedProductImages,
   ListingSafetyError,
 } from '../../../shared/utils/listingSafety';
 import { parseListingEdit } from '../validators/productValidator';
@@ -84,6 +85,9 @@ export class ProductRepository {
     uid: string,
   ): Promise<Product> {
     const changes = parseListingEdit(input);
+    if (changes.product_images) {
+      assertOwnedProductImages(changes.product_images, uid);
+    }
     const ref = this.db.collection(this.collectionName).doc(id);
     return this.db.runTransaction(async (tx) => {
       const doc = await tx.get(ref);
