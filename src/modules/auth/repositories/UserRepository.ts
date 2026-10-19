@@ -355,9 +355,9 @@ export class UserRepository {
   /** Removes listing uploads, including orphaned files with no Firestore document. */
   private async deleteUserProductMedia(firebaseUid: string): Promise<void> {
     const prefix = `products/${firebaseUid}/`;
-    const bucket = this.mediaBucket ?? getStorage().bucket();
 
     try {
+      const bucket = this.mediaBucket ?? getStorage().bucket();
       const [files] = await bucket.getFiles({ prefix });
       const results = await Promise.allSettled(files.map((file) => file.delete()));
       const failedFiles = files.filter((_, index) => results[index].status === 'rejected');
