@@ -595,6 +595,48 @@ describe('ProductService pagination', () => {
     ).rejects.toMatchObject({ code: 'LISTING_VALIDATION_FAILED' });
   });
 
+  it('deletes removed owned media after a successful listing edit', async () => {
+    const existing = createProduct('product-1', '2026-07-13T10:00:00.000Z');
+    existing.product_images = [
+      'https://firebasestorage.googleapis.com/v0/b/cherry.appspot.com/o/products%2Fuser-1%2Fkeep.jpg?alt=media',
+      'https://firebasestorage.googleapis.com/v0/b/cherry.appspot.com/o/products%2Fuser-1%2Fremove.jpg?alt=media',
+      'https://example.com/external.jpg',
+    ];
+    const updated = { ...existing, product_images: [existing.product_images[0]] };
+    const update = jest.fn().mockResolvedValue(updated);
+    const deleteCalls: string[] = [];
+    const bucket = {
+      name: 'cherry.appspot.com',
+      file: jest.fn((path: string) => ({
+        delete: jest.fn().mockImplementation(async () => {
+          deleteCalls.push(path);
+        }),
+      })),
+    };
+    const service = new ProductService(
+      { getById: jest.fn().mockResolvedValue(existing), update } as any,
+      productLikeRepo,
+      categoryRepo,
+      charityRepo,
+      postageSizeRepo,
+      bucket,
+    );
+
+    await expect(
+      service.updateProduct(
+        'product-1',
+        { product_images: [existing.product_images[0]] },
+        'user-1',
+      ),
+    ).resolves.toEqual(updated);
+    expect(update).toHaveBeenCalledWith(
+      'product-1',
+      { product_images: [existing.product_images[0]] },
+      'user-1',
+    );
+    expect(deleteCalls).toEqual(['products/user-1/remove.jpg']);
+  });
+
   it.each(['active', 'unlisted'] as const)(
     'delegates %s with the authenticated owner to the atomic repository',
     async (status) => {
@@ -616,4 +658,63 @@ describe('ProductService pagination', () => {
       );
     },
   );
+
+  it('deletes owned listing media after a safe product deletion', async () => {
+    const product = createProduct('product-1', '2026-07-13T10:00:00.000Z');
+    product.product_images = [
+      'https://firebasestorage.googleapis.com/v0/b/cherry.appspot.com/o/products%2Fuser-1%2Fold.jpg?alt=media',
+      'https://example.com/not-owned.jpg',
+    ];
+    const deleteCalls: string[] = [];
+    const productRepo = {
+      getById: jest.fn().mockResolvedValue(product),
+      changeAvailability: jest.fn().mockResolvedValue(null),
+    };
+    const bucket = {
+      name: 'cherry.appspot.com',
+      file: jest.fn((path: string) => ({
+        delete: jest.fn().mockImplementation(async () => {
+          deleteCalls.push(path);
+        }),
+      })),
+    };
+    const service = new ProductService(
+      productRepo as any,
+      productLikeRepo,
+      categoryRepo,
+      charityRepo,
+      postageSizeRepo,
+      bucket,
+    );
+
+    await expect(service.deleteProduct('product-1', 'user-1')).resolves.toBe(true);
+    expect(productRepo.changeAvailability).toHaveBeenCalledWith(
+      'product-1',
+      'user-1',
+      'delete',
+    );
+    expect(deleteCalls).toEqual([
+      'products/user-1/old.jpg',
+    ]);
+  });
+
+  it('does not delete media when the product deletion fails', async () => {
+    const product = createProduct('product-1', '2026-07-13T10:00:00.000Z');
+    const productRepo = {
+      getById: jest.fn().mockResolvedValue(product),
+      changeAvailability: jest.fn().mockRejectedValue(new Error('Payment pending')),
+    };
+    const bucket = { file: jest.fn() };
+    const service = new ProductService(
+      productRepo as any,
+      productLikeRepo,
+      categoryRepo,
+      charityRepo,
+      postageSizeRepo,
+      bucket,
+    );
+
+    await expect(service.deleteProduct('product-1', 'user-1')).rejects.toThrow('Payment pending');
+    expect(bucket.file).not.toHaveBeenCalled();
+  });
 });

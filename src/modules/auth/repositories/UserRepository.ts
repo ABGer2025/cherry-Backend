@@ -1,11 +1,21 @@
 import { firestore } from '../../../shared/config/firebaseConfig';
 import { User } from '../model/User';
 import { Timestamp, FieldValue, WriteBatch } from 'firebase-admin/firestore';
+import { getStorage } from 'firebase-admin/storage';
 
 const DELETED_USER_MARKER = 'deleted_user';
 const DELETED_EMAIL_MARKER = 'deleted@anonymous.invalid';
 const REDACTED_VALUE = 'REDACTED';
 const FIRESTORE_BATCH_LIMIT = 450;
+
+interface StorageFileLike {
+  name: string;
+  delete(): Promise<unknown>;
+}
+
+interface StorageBucketLike {
+  getFiles(options?: { prefix?: string }): Promise<[StorageFileLike[], ...unknown[]]>;
+}
 
 const chunk = <T>(items: T[], size: number): T[][] => {
   const chunks: T[][] = [];
@@ -18,6 +28,8 @@ const chunk = <T>(items: T[], size: number): T[][] => {
 export class UserRepository {
   private db = firestore;
   private collectionName = 'users';
+
+  constructor(private readonly mediaBucket?: StorageBucketLike) {}
 
   async getAll(): Promise<User[]> {
     const snapshot = await this.db.collection(this.collectionName).get();
@@ -328,6 +340,8 @@ export class UserRepository {
       });
     }
 
+    await this.deleteUserProductMedia(firebaseUid);
+
     return {
       deletedUserProfiles: userProfilesSnapshot.size,
       deletedUnsoldProducts: unsoldProductDocs.length,
@@ -336,5 +350,33 @@ export class UserRepository {
       anonymisedShipments: uniqueShipmentDocs.length,
       deletedLikes: likesSnapshot.size,
     };
+  }
+
+  /** Removes listing uploads, including orphaned files with no Firestore document. */
+  private async deleteUserProductMedia(firebaseUid: string): Promise<void> {
+    try {
+      const bucket = this.mediaBucket ?? getStorage().bucket();
+      const prefixes = [`products/${firebaseUid}/`];
+
+      for (const prefix of prefixes) {
+        const [files] = await bucket.getFiles({ prefix });
+        const results = await Promise.allSettled(files.map((file) => file.delete()));
+        const failedFiles = files.filter((_, index) => results[index].status === 'rejected');
+
+        if (failedFiles.length > 0) {
+          console.error('Account product media cleanup failed', {
+            firebaseUid,
+            prefix,
+            failedFiles: failedFiles.map((file) => file.name),
+            totalFiles: files.length,
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Account product media listing failed', {
+        firebaseUid,
+        error,
+      });
+    }
   }
 }
