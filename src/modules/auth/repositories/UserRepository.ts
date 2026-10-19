@@ -356,7 +356,7 @@ export class UserRepository {
   private async deleteUserProductMedia(firebaseUid: string): Promise<void> {
     try {
       const bucket = this.mediaBucket ?? getStorage().bucket();
-      const prefixes = [`products/${firebaseUid}/`, `listing-media-v1/${firebaseUid}/`];
+      const prefixes = [`products/${firebaseUid}/`];
 
       for (const prefix of prefixes) {
         const [files] = await bucket.getFiles({ prefix });

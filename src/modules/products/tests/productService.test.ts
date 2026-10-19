@@ -620,7 +620,6 @@ describe('ProductService pagination', () => {
   it('deletes owned listing media after a safe product deletion', async () => {
     const product = createProduct('product-1', '2026-07-13T10:00:00.000Z');
     product.product_images = [
-      'gs://cherry.appspot.com/listing-media-v1/user-1/new.jpg',
       'https://firebasestorage.googleapis.com/v0/b/cherry.appspot.com/o/products%2Fuser-1%2Fold.jpg?alt=media',
       'https://example.com/not-owned.jpg',
     ];
@@ -653,7 +652,6 @@ describe('ProductService pagination', () => {
       'delete',
     );
     expect(deleteCalls).toEqual([
-      'listing-media-v1/user-1/new.jpg',
       'products/user-1/old.jpg',
     ]);
   });

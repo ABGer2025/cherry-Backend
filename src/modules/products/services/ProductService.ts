@@ -383,10 +383,7 @@ export class ProductService {
       return null;
     }
 
-    const allowedPrefixes = [
-      `listing-media-v1/${uid}/`,
-      `products/${uid}/`,
-    ];
+    const allowedPrefixes = [`products/${uid}/`];
     return allowedPrefixes.some((prefix) => objectPath.startsWith(prefix))
       ? objectPath
       : null;
