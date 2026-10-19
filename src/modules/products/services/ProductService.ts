@@ -19,9 +19,19 @@ import { CategoryRepository } from '../../categories/repositories/CategoryReposi
 import { CharityRepository } from '../../charities/repositories/CharityRepository';
 import { PostageSize } from '../../postage-sizes/model/PostageSize';
 import { PostageSizeRepository } from '../../postage-sizes/repositories/PostageSizeRepository';
+import { getStorage } from 'firebase-admin/storage';
 
 const DEFAULT_PRODUCT_PAGE_SIZE = 20;
 const MAX_PRODUCT_PAGE_SIZE = 50;
+
+interface StorageFileLike {
+  delete(): Promise<unknown>;
+}
+
+interface StorageBucketLike {
+  name?: string;
+  file(path: string): StorageFileLike;
+}
 
 export class ProductService {
   constructor(
@@ -30,6 +40,7 @@ export class ProductService {
     private categoryRepo: CategoryRepository,
     private charityRepo: CharityRepository,
     private postageSizeRepo: PostageSizeRepository,
+    private mediaBucket?: StorageBucketLike,
   ) {}
 
   async getAllProducts(): Promise<Product[]> {
@@ -305,8 +316,80 @@ export class ProductService {
   }
 
   async deleteProduct(id: string, uid: string): Promise<boolean> {
+    const product = await this.productRepo.getById(id);
     await this.productRepo.changeAvailability(id, uid, 'delete');
+    if (product) {
+      await this.deleteProductMedia(product, uid);
+    }
     return true;
+  }
+
+  private async deleteProductMedia(product: Product, uid: string): Promise<void> {
+    const configuredBucket = this.mediaBucket;
+    const paths = [...new Set(
+      product.product_images
+        .map((url) => this.storagePathForOwnedMedia(url, uid, configuredBucket?.name))
+        .filter((path): path is string => path !== null),
+    )];
+    if (paths.length === 0) return;
+
+    const bucket = configuredBucket ?? (getStorage().bucket() as StorageBucketLike);
+
+    const results = await Promise.allSettled(
+      paths.map((path) => bucket.file(path).delete()),
+    );
+    const failures = results.filter((result) => result.status === 'rejected');
+    if (failures.length > 0) {
+      console.error('Product media cleanup failed', {
+        productId: product.id,
+        failedFiles: failures.length,
+        totalFiles: paths.length,
+      });
+    }
+  }
+
+  private storagePathForOwnedMedia(
+    value: string,
+    uid: string,
+    bucketName?: string,
+  ): string | null {
+    let parsed: URL;
+    try {
+      parsed = new URL(value);
+    } catch {
+      return null;
+    }
+
+    let urlBucket: string | undefined;
+    let objectPath: string | undefined;
+    if (parsed.protocol === 'gs:') {
+      urlBucket = parsed.hostname;
+      objectPath = decodeURIComponent(parsed.pathname.slice(1));
+    } else if (parsed.hostname === 'firebasestorage.googleapis.com') {
+      const match = parsed.pathname.match(/^\/v0\/b\/([^/]+)\/o\/(.+)$/);
+      if (match) {
+        urlBucket = decodeURIComponent(match[1]);
+        objectPath = decodeURIComponent(match[2]);
+      }
+    } else if (parsed.hostname === 'storage.googleapis.com') {
+      const parts = parsed.pathname.split('/').filter(Boolean);
+      if (parts.length > 1) {
+        urlBucket = decodeURIComponent(parts[0]);
+        objectPath = decodeURIComponent(parts.slice(1).join('/'));
+      }
+    }
+
+    if (!objectPath || (bucketName && urlBucket && urlBucket !== bucketName)) {
+      return null;
+    }
+
+    const allowedPrefixes = [
+      `listing-media-v1/${uid}/`,
+      `products/${uid}/`,
+    ];
+    return allowedPrefixes.some((prefix) => objectPath.startsWith(prefix))
+      ? objectPath
+      : null;
   }
 
   async unlistProduct(id: string, uid: string): Promise<Product | null> {
