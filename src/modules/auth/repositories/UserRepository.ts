@@ -354,20 +354,23 @@ export class UserRepository {
 
   /** Removes listing uploads, including orphaned files with no Firestore document. */
   private async deleteUserProductMedia(firebaseUid: string): Promise<void> {
-    const prefix = `products/${firebaseUid}/`;
-
     try {
       const bucket = this.mediaBucket ?? getStorage().bucket();
-      const [files] = await bucket.getFiles({ prefix });
-      const results = await Promise.allSettled(files.map((file) => file.delete()));
-      const failedFiles = files.filter((_, index) => results[index].status === 'rejected');
+      const prefixes = [`products/${firebaseUid}/`, `listing-media-v1/${firebaseUid}/`];
 
-      if (failedFiles.length > 0) {
-        console.error('Account product media cleanup failed', {
-          firebaseUid,
-          failedFiles: failedFiles.map((file) => file.name),
-          totalFiles: files.length,
-        });
+      for (const prefix of prefixes) {
+        const [files] = await bucket.getFiles({ prefix });
+        const results = await Promise.allSettled(files.map((file) => file.delete()));
+        const failedFiles = files.filter((_, index) => results[index].status === 'rejected');
+
+        if (failedFiles.length > 0) {
+          console.error('Account product media cleanup failed', {
+            firebaseUid,
+            prefix,
+            failedFiles: failedFiles.map((file) => file.name),
+            totalFiles: files.length,
+          });
+        }
       }
     } catch (error) {
       console.error('Account product media listing failed', {
