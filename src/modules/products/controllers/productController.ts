@@ -506,13 +506,6 @@ export const likeProduct = async (
       'Product likes updated successfully',
     );
   } catch (err) {
-    if (
-      err instanceof Error &&
-      err.message === 'You cannot like your own product'
-    ) {
-      ResponseHandler.forbidden(res, err.message);
-      return;
-    }
     if (sendListingSafetyError(res, err)) return;
     if (err instanceof Error && err.message === 'Product not found') {
       ResponseHandler.notFound(
