@@ -48,3 +48,34 @@ export function assertOwner(data: { userId?: unknown }, uid: string): void {
       'You can only change your own listings.',
     );
 }
+
+export function assertOwnedProductImages(images: string[], uid: string): void {
+  const prefix = `products/${uid}/`;
+
+  for (const image of images) {
+    try {
+      const url = new URL(image);
+      let objectPath: string | undefined;
+
+      if (url.protocol === 'gs:') {
+        objectPath = decodeURIComponent(url.pathname.slice(1));
+      } else if (url.hostname === 'firebasestorage.googleapis.com') {
+        const match = url.pathname.match(/^\/v0\/b\/[^/]+\/o\/(.+)$/);
+        if (match) objectPath = decodeURIComponent(match[1]);
+      } else if (url.hostname === 'storage.googleapis.com') {
+        const parts = url.pathname.split('/').filter(Boolean);
+        if (parts.length > 1) {
+          objectPath = decodeURIComponent(parts.slice(1).join('/'));
+        }
+      }
+
+      if (!objectPath || !objectPath.startsWith(prefix)) throw new Error();
+    } catch {
+      throw new ListingSafetyError(
+        400,
+        'LISTING_MEDIA_NOT_OWNED',
+        'Listing images must belong to the authenticated seller.',
+      );
+    }
+  }
+}
