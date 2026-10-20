@@ -94,6 +94,10 @@ export const exportOrdersCsv = async (req: Request, res: Response): Promise<void
         'Donation Amount (£)',
         'Date of Order/Donation',
         'Status',
+        'Payout Status',
+        'Payout Hold Reason',
+        'Delivered At',
+        'Release At',
       ],
       writeBOM: true, // Add BOM for proper Excel encoding
     });
@@ -151,6 +155,10 @@ export const exportOrdersCsv = async (req: Request, res: Response): Promise<void
           amountInPounds,
           orderDate,
           order.status,
+          order.payoutStatus || '',
+          order.payoutHoldReason || '',
+          order.deliveredAt ? new Date(order.deliveredAt).toISOString() : '',
+          order.releaseAt ? new Date(order.releaseAt).toISOString() : '',
         ]);
       }
     }
