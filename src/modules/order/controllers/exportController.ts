@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { ResponseHandler } from '../../../shared/utils/responseHandler';
 import { OrderRepository } from '../repositories/OrderRepository';
+import { getActiveHoldReasons } from '../services/holdReasons';
 import { admin } from '../../../shared/config/firebaseConfig';
 import { format } from '@fast-csv/format';
 
@@ -156,7 +157,7 @@ export const exportOrdersCsv = async (req: Request, res: Response): Promise<void
           orderDate,
           order.status,
           order.payoutStatus || '',
-          order.payoutHoldReason || '',
+          getActiveHoldReasons(order).join(';'),
           order.deliveredAt ? new Date(order.deliveredAt).toISOString() : '',
           order.releaseAt ? new Date(order.releaseAt).toISOString() : '',
         ]);

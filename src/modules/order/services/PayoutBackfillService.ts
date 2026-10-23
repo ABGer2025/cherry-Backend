@@ -1,4 +1,5 @@
 import { FieldPath } from 'firebase-admin/firestore';
+import { holdReasonFields } from './holdReasons';
 import { firestore } from '../../../shared/config/firebaseConfig';
 import { calculateReleaseAt } from '../../../shared/config/orderReleaseConfig';
 import { ShipmentRepository } from '../../shipping/repositories/ShipmentRepository';
@@ -197,7 +198,7 @@ export class PayoutBackfillService {
         deliveredAt: orderDoc.data()!.deliveredAt ?? plan.deliveredAt,
         releaseAt: plan.releaseAt,
         ...(plan.autoRelease ? { autoReleaseAt: plan.releaseAt } : {}),
-        ...(plan.holdReason ? { payoutHoldReason: plan.holdReason } : {}),
+        ...(plan.holdReason ? holdReasonFields([plan.holdReason]) : {}),
         updatedAt: now,
       });
       recordPayoutEvent(

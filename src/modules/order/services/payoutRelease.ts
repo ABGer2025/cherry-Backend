@@ -1,4 +1,5 @@
 import { PayoutReleaseTrigger } from '../model/Order';
+import { getActiveHoldReasons } from './holdReasons';
 
 export type PayoutReleaseBlockReason =
   | 'order_not_found'
@@ -62,13 +63,19 @@ export const evaluatePayoutRelease = (input: {
     return blocked('not_delivered');
   }
 
-  // An admin who resolves a dispute in favour of release overrides the hold. An
-  // explicit admin override also lifts refund, chargeback and fraud holds, but
-  // never an unresolved buyer dispute, which has its own resolution flow.
-  if (trigger !== 'dispute_resolution') {
-    if (order.payoutHoldReason && trigger !== 'admin_override') {
+  // Resolving a buyer dispute in favour of release lifts only the dispute hold.
+  // Refund, chargeback, fraud and admin holds stay in force; an explicit admin
+  // override lifts them, but never an unresolved buyer dispute, which has its
+  // own resolution flow.
+  if (trigger !== 'admin_override') {
+    const blockingHolds = getActiveHoldReasons(order).filter(
+      (reason) => !(trigger === 'dispute_resolution' && reason === 'dispute'),
+    );
+    if (blockingHolds.length > 0) {
       return blocked('on_hold');
     }
+  }
+  if (trigger !== 'dispute_resolution') {
     if (order.buyerDisputeId && order.buyerDisputeStatus !== 'resolved') {
       return blocked('dispute_open');
     }

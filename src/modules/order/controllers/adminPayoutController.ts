@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { requireSingleParam } from '../../../shared/utils/requestParam';
 import { ResponseHandler } from '../../../shared/utils/responseHandler';
 import { OrderRepository } from '../repositories/OrderRepository';
+import { getActiveHoldReasons } from '../services/holdReasons';
 import {
   MAX_RECONCILE_LIMIT,
   OrderReleaseReconciliationService,
@@ -99,6 +100,7 @@ export const getAdminOrderPayout = async (
         orderId: order.id,
         payoutStatus: order.payoutStatus ?? null,
         payoutHoldReason: order.payoutHoldReason ?? null,
+        payoutHoldReasons: getActiveHoldReasons(order),
         deliveredAt: order.deliveredAt ?? null,
         releaseAt: order.releaseAt ?? null,
         readyForPayoutAt: order.readyForPayoutAt ?? null,

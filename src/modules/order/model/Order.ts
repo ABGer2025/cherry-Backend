@@ -97,6 +97,9 @@ export interface Order {
   // payout hold both run from this moment.
   deliveredAt?: Date;
   payoutStatus?: PayoutStatus;
+  // Every hold currently blocking the payout; it is released only once empty.
+  payoutHoldReasons?: PayoutHoldReason[];
+  // The first active reason, kept for display and export.
   payoutHoldReason?: PayoutHoldReason;
   releaseAt?: Date;
   // releaseAt while the order may be released automatically; absent while any

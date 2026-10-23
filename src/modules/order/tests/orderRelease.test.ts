@@ -179,6 +179,53 @@ describe('evaluatePayoutRelease', () => {
     });
     expect(evaluate(order, 'hold_expired').canRelease).toBe(false);
   });
+
+  describe('multiple active holds', () => {
+    const disputed = {
+      buyerDisputeId: 'd1',
+      buyerDisputeStatus: 'in_progress',
+    };
+
+    it.each(['refund', 'chargeback', 'fraud', 'admin'])(
+      'does not let a dispute resolution lift a %s hold',
+      (reason) => {
+        const order = heldOrder({
+          ...disputed,
+          payoutHoldReasons: ['dispute', reason],
+          payoutHoldReason: 'dispute',
+        });
+        expect(evaluate(order, 'dispute_resolution', undefined, deliveredAt)).toEqual({
+          canRelease: false,
+          result: { status: 'blocked', reason: 'on_hold' },
+        });
+      },
+    );
+
+    it('lets a dispute resolution lift a lone dispute hold', () => {
+      const order = heldOrder({ ...disputed, payoutHoldReasons: ['dispute'] });
+      expect(
+        evaluate(order, 'dispute_resolution', undefined, deliveredAt).canRelease,
+      ).toBe(true);
+    });
+
+    it('blocks the other triggers while any hold remains', () => {
+      const order = heldOrder({ payoutHoldReasons: ['refund'] });
+      for (const trigger of ['hold_expired', 'buyer_confirmation'] as const) {
+        expect(evaluate(order, trigger).canRelease).toBe(false);
+      }
+    });
+
+    it('lets an admin override lift every hold', () => {
+      expect(
+        evaluatePayoutRelease({
+          order: heldOrder({ payoutHoldReasons: ['refund', 'chargeback'] }),
+          payment: { status: 'paid' },
+          trigger: 'admin_override',
+          now: deliveredAt,
+        }).canRelease,
+      ).toBe(true);
+    });
+  });
 });
 
 describe('OrderRepository delivery hold and release', () => {
@@ -526,13 +573,77 @@ describe('OrderRepository delivery hold and release', () => {
       ).resolves.toEqual({ status: 'blocked', reason: 'on_hold' });
     });
 
-    it('keeps an earlier hold reason but still records the new one', async () => {
+    it('keeps an earlier hold reason and also tracks the new one', async () => {
       mockFake.store.set('orders/o1', heldOrder({ payoutHoldReason: 'dispute' }));
 
-      await repo.placePayoutHold('o1', hold('chargeback'));
+      await expect(repo.placePayoutHold('o1', hold('chargeback'))).resolves.toBe(
+        'placed',
+      );
 
-      expect(mockFake.store.get('orders/o1')?.payoutHoldReason).toBe('dispute');
+      expect(mockFake.store.get('orders/o1')).toMatchObject({
+        payoutHoldReason: 'dispute',
+        payoutHoldReasons: ['dispute', 'chargeback'],
+      });
       expect(eventsOf('o1')).toHaveLength(1);
+    });
+
+    it('ignores a replay of a reason that is already active', async () => {
+      mockFake.store.set('orders/o1', heldOrder());
+
+      await repo.placePayoutHold('o1', hold('chargeback'));
+      await repo.placePayoutHold('o1', hold('refund'));
+      await expect(repo.placePayoutHold('o1', hold('refund'))).resolves.toBe(
+        'unchanged',
+      );
+      await expect(repo.placePayoutHold('o1', hold('chargeback'))).resolves.toBe(
+        'unchanged',
+      );
+
+      expect(mockFake.store.get('orders/o1')?.payoutHoldReasons).toEqual([
+        'chargeback',
+        'refund',
+      ]);
+      expect(eventsOf('o1')).toHaveLength(2);
+    });
+
+    it('stays held and unscheduled until every hold is cleared', async () => {
+      const due = new Date(deliveredAt.getTime() + 49 * HOUR);
+      mockFake.store.set('orders/o1', heldOrder());
+      await repo.placePayoutHold('o1', hold('chargeback'));
+      await repo.placePayoutHold('o1', hold('refund'));
+
+      await expect(
+        repo.clearPayoutHold('o1', hold('chargeback')),
+      ).resolves.toBe('cleared');
+
+      expect(mockFake.store.get('orders/o1')).toMatchObject({
+        payoutStatus: 'held',
+        payoutHoldReason: 'refund',
+        payoutHoldReasons: ['refund'],
+      });
+      expect(isScheduled(mockFake.store.get('orders/o1'))).toBe(false);
+      await expect(
+        repo.releaseOrderForPayout('o1', 'hold_expired', due),
+      ).resolves.toEqual({ status: 'blocked', reason: 'on_hold' });
+
+      await repo.clearPayoutHold('o1', hold('refund'));
+
+      expect(
+        Array.isArray(mockFake.store.get('orders/o1')?.payoutHoldReasons),
+      ).toBe(false);
+      expect(isScheduled(mockFake.store.get('orders/o1'))).toBe(true);
+    });
+
+    it('reads a legacy order that only has the single reason field', async () => {
+      mockFake.store.set('orders/o1', heldOrder({ payoutHoldReason: 'refund' }));
+
+      await repo.placePayoutHold('o1', hold('fraud'));
+      await repo.clearPayoutHold('o1', hold('refund'));
+
+      expect(mockFake.store.get('orders/o1')).toMatchObject({
+        payoutHoldReason: 'fraud',
+        payoutHoldReasons: ['fraud'],
+      });
     });
 
     it('does not touch orders without a payout state or missing orders', async () => {

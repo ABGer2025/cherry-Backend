@@ -7,6 +7,12 @@ import {
 } from '../modules/order/services/payoutRelease';
 import { FieldValue } from 'firebase-admin/firestore';
 import {
+  addHoldReason,
+  getActiveHoldReasons,
+  holdReasonFields,
+  removeHoldReason,
+} from '../modules/order/services/holdReasons';
+import {
   NewPayoutEvent,
   recordPayoutEvent,
 } from '../modules/order/services/payoutEvents';
@@ -161,7 +167,12 @@ export class DisputeRepository {
         buyerDisputedAt: now,
         // Blocks both buyer confirmation and the expiry task from releasing funds.
         ...(order.payoutStatus === 'held'
-          ? { payoutHoldReason: 'dispute', autoReleaseAt: FieldValue.delete() }
+          ? {
+              ...holdReasonFields(
+                addHoldReason(getActiveHoldReasons(order), 'dispute'),
+              ),
+              autoReleaseAt: FieldValue.delete(),
+            }
           : {}),
       });
       if (order.payoutStatus === 'held') {
@@ -328,7 +339,7 @@ export class DisputeRepository {
               payoutStatus: 'ready_for_payout',
               readyForPayoutAt: now,
               payoutReleaseTrigger: 'dispute_resolution',
-              payoutHoldReason: FieldValue.delete(),
+              ...holdReasonFields([]),
               autoReleaseAt: FieldValue.delete(),
             });
             payoutEvent = {
@@ -347,8 +358,17 @@ export class DisputeRepository {
             throw new DisputeAdminError('release_blocked');
           }
         } else if (orderData.payoutStatus === 'held') {
-          // Refund execution is separate; the funds just stay held.
-          orderUpdates.payoutHoldReason = 'refund';
+          // Refund execution is separate; the funds just stay held. The dispute
+          // hold ends with its resolution; any other active hold is kept.
+          Object.assign(
+            orderUpdates,
+            holdReasonFields(
+              addHoldReason(
+                removeHoldReason(getActiveHoldReasons(orderData), 'dispute'),
+                'refund',
+              ),
+            ),
+          );
           orderUpdates.autoReleaseAt = FieldValue.delete();
           payoutEvent = {
             type: 'hold_placed',

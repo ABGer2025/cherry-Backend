@@ -157,6 +157,66 @@ describe('DisputeRepository hold and release', () => {
       expect(isScheduled()).toBe(false);
     });
 
+    it('keeps an existing hold when a buyer dispute is raised', async () => {
+      seedOrder({
+        payoutHoldReason: 'chargeback',
+        payoutHoldReasons: ['chargeback'],
+        autoReleaseAt: undefined,
+      });
+
+      await submit();
+
+      expect(mockFake.store.get('orders/order-1')).toMatchObject({
+        payoutHoldReason: 'chargeback',
+        payoutHoldReasons: ['chargeback', 'dispute'],
+      });
+    });
+
+    it.each([
+      ['a refund', 'refund'],
+      ['a chargeback', 'chargeback'],
+    ])(
+      'does not release funds on a dispute resolution while %s hold is active',
+      async (_name, reason) => {
+        seedOrder({
+          payoutHoldReason: reason,
+          payoutHoldReasons: [reason],
+          autoReleaseAt: undefined,
+        });
+        const dispute = await submit();
+        mockFake.store.set('disputes/dispute-1', {
+          ...mockFake.store.get(`disputes/${dispute.disputeId}`),
+          disputeId: 'dispute-1',
+        });
+
+        await expect(
+          repo.moderateDispute(
+            'dispute-1',
+            'admin-1',
+            'resolved',
+            'Reviewed.',
+            'key-2',
+            'release_to_charity',
+          ),
+        ).rejects.toMatchObject({ code: 'release_blocked' });
+        expect(mockFake.store.get('orders/order-1')?.payoutStatus).toBe('held');
+      },
+    );
+
+    it('keeps other holds when the buyer is refunded', async () => {
+      await raiseDispute({
+        payoutHoldReason: 'fraud',
+        payoutHoldReasons: ['fraud'],
+      });
+
+      await resolve('refund_buyer');
+
+      expect(mockFake.store.get('orders/order-1')).toMatchObject({
+        payoutStatus: 'held',
+        payoutHoldReasons: ['fraud', 'refund'],
+      });
+    });
+
     it('refuses to release a flagged payment', async () => {
       await raiseDispute();
       mockFake.store.set('payments/pi_1', { status: 'flagged' });

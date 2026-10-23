@@ -19,7 +19,9 @@ Paying the charity is a separate step (issue #44) that starts from
 - An order is released when **either** the buyer confirms receipt **or** the hold
   expires, and only if nothing blocks it.
 - Blocked when: the payment is not confirmed or is `flagged`, a dispute is open,
-  or a hold reason is set (`dispute`, `refund`, `chargeback`, `fraud`, `admin`).
+  or any hold reason is active (`dispute`, `refund`, `chargeback`, `fraud`, `admin`).
+  Holds are tracked as a set (`payoutHoldReasons`) and the order is released only
+  once the set is empty.
 - A buyer cannot raise a dispute after confirming receipt, after release, or at or
   after `releaseAt`, even if the release task has not run yet.
 - A buyer cannot confirm receipt while a dispute exists.
@@ -102,10 +104,12 @@ history is ordered by `createdAt` (single field), both indexed automatically.
 Resolving a dispute requires `outcome` on
 `PATCH /api/admin/disputes/{disputeId}/status`:
 
-- `release_to_charity` - moves the order to `ready_for_payout` (still refused for
-  a flagged or unconfirmed payment).
-- `refund_buyer` - keeps the funds held with hold reason `refund`. Executing the
-  refund is not part of this change.
+- `release_to_charity` - lifts only the `dispute` hold and moves the order to
+  `ready_for_payout` (still refused for a flagged or unconfirmed payment, or while
+  a `refund`, `chargeback`, `fraud` or `admin` hold is active).
+- `refund_buyer` - ends the `dispute` hold and adds a `refund` hold, keeping the
+  funds held. Other active holds are kept. Executing the refund is not part of
+  this change.
 
 ## Stripe events
 
@@ -130,8 +134,11 @@ npm run stripe:webhook:events -- --url https://<your-service-url>/api/payment/we
 
 The order is found through the PaymentIntent. If it was already `ready_for_payout`
 but not yet paid out, it goes back to `held`, so the payout step never sees a
-refunded or disputed order. An earlier hold reason keeps priority, and every hold
-is recorded in the history. Replayed events change nothing. Failures return 500 so
+refunded or disputed order. Each hold is tracked separately in
+`payoutHoldReasons`; clearing one (for example a won chargeback) never lifts the
+others, and the order is retried for release only once none remain.
+`payoutHoldReason` mirrors the first active reason for display. Every hold is
+recorded in the history. Replayed events change nothing. Failures return 500 so
 Stripe retries.
 
 ## Admin controls

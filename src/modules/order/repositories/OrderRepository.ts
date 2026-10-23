@@ -9,6 +9,12 @@ import {
 } from '../services/payoutRelease';
 import { calculateReleaseAt } from '../../../shared/config/orderReleaseConfig';
 import {
+  addHoldReason,
+  getActiveHoldReasons,
+  holdReasonFields,
+  removeHoldReason,
+} from '../services/holdReasons';
+import {
   PayoutEvent,
   PayoutEventActorRole,
   recordPayoutEvent,
@@ -626,7 +632,9 @@ export class OrderRepository {
               releaseAt,
               // A hold placed before delivery (for example a refund) keeps the
               // order out of the reconciliation scan until it is cleared.
-              ...(orderData.payoutHoldReason ? {} : { autoReleaseAt: releaseAt }),
+              ...(getActiveHoldReasons(orderData).length > 0
+                ? {}
+                : { autoReleaseAt: releaseAt }),
             }
           : {}),
       });
@@ -689,17 +697,14 @@ export class OrderRepository {
       if (!['held', 'ready_for_payout'].includes(orderData.payoutStatus)) {
         return 'not_applicable' as const;
       }
-      if (
-        orderData.payoutStatus === 'held' &&
-        orderData.payoutHoldReason === hold.reason
-      ) {
+      const active = getActiveHoldReasons(orderData);
+      if (orderData.payoutStatus === 'held' && active.includes(hold.reason)) {
         return 'unchanged' as const;
       }
 
       transaction.update(orderRef, {
         payoutStatus: 'held',
-        // An earlier hold keeps priority; this one is still on the audit trail.
-        payoutHoldReason: orderData.payoutHoldReason ?? hold.reason,
+        ...holdReasonFields(addHoldReason(active, hold.reason)),
         autoReleaseAt: FieldValue.delete(),
         readyForPayoutAt: FieldValue.delete(),
         payoutReleaseTrigger: FieldValue.delete(),
@@ -725,6 +730,7 @@ export class OrderRepository {
   }
 
   // Only clears the hold it is asked to; it never releases the order itself.
+  // Other active holds keep the order out of the reconciliation scan.
   async clearPayoutHold(
     orderId: string,
     clear: {
@@ -740,23 +746,28 @@ export class OrderRepository {
 
     return firestore.runTransaction(async (transaction) => {
       const orderDoc = await transaction.get(orderRef);
+      const orderData = orderDoc.exists ? orderDoc.data()! : undefined;
+      const active = orderData ? getActiveHoldReasons(orderData) : [];
       if (
-        !orderDoc.exists ||
-        orderDoc.data()!.payoutStatus !== 'held' ||
-        orderDoc.data()!.payoutHoldReason !== clear.reason
+        !orderData ||
+        orderData.payoutStatus !== 'held' ||
+        !active.includes(clear.reason)
       ) {
         return 'unchanged' as const;
       }
 
+      const remaining = removeHoldReason(active, clear.reason);
       transaction.update(orderRef, {
-        payoutHoldReason: FieldValue.delete(),
-        // Back in the reconciliation scan, unless a buyer dispute is still open.
-        ...(orderDoc.data()!.releaseAt &&
+        ...holdReasonFields(remaining),
+        // Back in the reconciliation scan, unless another hold or a buyer
+        // dispute is still open.
+        ...(remaining.length === 0 &&
+        orderData.releaseAt &&
         !(
-          orderDoc.data()!.buyerDisputeId &&
-          orderDoc.data()!.buyerDisputeStatus !== 'resolved'
+          orderData.buyerDisputeId &&
+          orderData.buyerDisputeStatus !== 'resolved'
         )
-          ? { autoReleaseAt: orderDoc.data()!.releaseAt }
+          ? { autoReleaseAt: orderData.releaseAt }
           : {}),
         updatedAt: now,
       });
@@ -876,7 +887,7 @@ export class OrderRepository {
         payoutStatus: 'ready_for_payout',
         readyForPayoutAt: now,
         payoutReleaseTrigger: trigger,
-        payoutHoldReason: FieldValue.delete(),
+        ...holdReasonFields([]),
         autoReleaseAt: FieldValue.delete(),
         updatedAt: now,
       });
@@ -900,7 +911,10 @@ export class OrderRepository {
           toStatus: 'ready_for_payout',
           trigger,
           note: admin?.note,
-          reason: trigger === 'admin_override' ? orderData.payoutHoldReason : undefined,
+          reason:
+            trigger === 'admin_override'
+              ? getActiveHoldReasons(orderData)[0]
+              : undefined,
         },
         now,
       );
